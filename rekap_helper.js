@@ -3,10 +3,13 @@ import fs from 'fs';
 
 const formatRp = (angka) => new Intl.NumberFormat('id-ID').format(Math.round(angka) || 0);
 
-export function getStructuredTextRekap(dataList, targetSPD = 4725000) {
+export function getStructuredTextRekap(dataList, targetSPD = 4725000, storeInfo = null) {
     if (!dataList || dataList.length === 0) {
         return "⚠️ Belum ada data laporan yang tersimpan untuk direkap bulan ini.";
     }
+
+    const namaToko = storeInfo?.nama_toko || storeInfo?.nama || 'OMI TITAN EKSEKUTIF MART';
+    const kodeToko = storeInfo?.kode_toko || storeInfo?.kode || 'O8BM';
 
     let totalSpd = 0;
     let totalMpp = 0;
@@ -31,7 +34,7 @@ export function getStructuredTextRekap(dataList, targetSPD = 4725000) {
     const achMtd = ((rataSpd / targetSPD) * 100).toFixed(2);
 
     let text = `📊 *REKAP PERFORMA TOKO BULAN INI*\n`;
-    text += `OMI TITAN EKSEKUTIF MART (O8BM)\n`;
+    text += `${namaToko} (${kodeToko})\n`;
     text += `----------------------------------------\n`;
     text += `🗓️ *Total Hari Kerja Masuk:* ${jumlahHari} Hari\n\n`;
 
@@ -65,17 +68,20 @@ export function getStructuredTextRekap(dataList, targetSPD = 4725000) {
     return text;
 }
 
-export function generateRekapExcel(dataList, outputPath = 'Rekap_Bulanan.xlsx', targetSPD = 4725000) {
+export function generateRekapExcel(dataList, outputPath = 'Rekap_Bulanan.xlsx', targetSPD = 4725000, storeInfo = null) {
     if (!dataList || dataList.length === 0) {
         throw new Error('Tidak ada data laporan untuk di-export ke Excel.');
     }
+
+    const namaToko = storeInfo?.nama_toko || storeInfo?.nama || 'OMI TITAN EKSEKUTIF MART';
+    const kodeToko = storeInfo?.kode_toko || storeInfo?.kode || 'O8BM';
 
     const wb = xlsx.utils.book_new();
 
     // 1. SHEET 1: DATA HARIAN LENGKAP
     const rowsHarian = [];
     rowsHarian.push(['LAPORAN PENJUALAN HARIAN TOKO']);
-    rowsHarian.push(['OMI TITAN EKSEKUTIF MART (O8BM)']);
+    rowsHarian.push([`${namaToko} (${kodeToko})`]);
     rowsHarian.push([`Tanggal Export: ${new Date().toLocaleDateString('id-ID')} ${new Date().toLocaleTimeString('id-ID')}`]);
     rowsHarian.push([]); // blank
 
@@ -171,7 +177,7 @@ export function generateRekapExcel(dataList, outputPath = 'Rekap_Bulanan.xlsx', 
 
     const rowsRingkasan = [
         ['RINGKASAN AKUMULASI PERFORMA BULANAN'],
-        ['OMI TITAN EKSEKUTIF MART (O8BM)'],
+        [`${namaToko} (${kodeToko})`],
         [`Tanggal Export: ${new Date().toLocaleDateString('id-ID')}`],
         [],
         ['Indikator Performa', 'Nilai / Akumulasi', 'Keterangan'],

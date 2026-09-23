@@ -4,11 +4,10 @@ import fs from 'fs';
 import path from 'path';
 import qrcode from 'qrcode-terminal';
 
-import { isAllowed, isAdmin, addNumber, removeNumber, listNumbers, normalizeNumber, loadWhitelist } from './whitelist_helper.js';
+import { isAllowed, isSuperAdmin, isAdmin, addNumber, removeNumber, listNumbers, normalizeNumber, loadWhitelist } from './whitelist_helper.js';
 import { getLatestParetoFile, analyzePareto, generatePbExcel, getPbSummaryText } from './pareto_analyzer.js';
 import { getStructuredTextRekap, generateRekapExcel } from './rekap_helper.js';
-
-const TARGET_SPD = 4725000;
+import { loadConfig, updateConfig, getConfigSummary } from './config_helper.js';
 
 function parseNominal(val) {
     if (val === undefined || val === null) return 0;
@@ -17,6 +16,11 @@ function parseNominal(val) {
 }
 
 const formatRp = (angka) => new Intl.NumberFormat('id-ID').format(Math.round(angka) || 0);
+
+// Map untuk alur konfirmasi interaktif upload file Pareto:
+// Key: normalized sender number
+// Value: { filePath, fileName, timestamp }
+const pendingParetoUploads = new Map();
 
 async function startBot() {
     console.log('⏳ Memulai program bot laporan & analisa pareto toko...');
@@ -70,6 +74,7 @@ async function startBot() {
 
         const sender = m.key.remoteJid;
         const senderNumber = m.key.participant || sender;
+        const normSender = normalizeNumber(senderNumber);
 
         const text = m.message.conversation ||
                      m.message.extendedTextMessage?.text ||
@@ -79,8 +84,10 @@ async function startBot() {
         const cleanText = text.trim();
         const lowerText = cleanText.toLowerCase();
 
-        // Izinkan pesan dari diri sendiri (Message Yourself) HANYA jika berupa perintah bot eksplisit
-        const isBotCommandKeyword = lowerText.startsWith('!') || ['menu', 'lapor', 'rekap', 'pb'].includes(lowerText);
+        // Izinkan pesan dari diri sendiri (Message Yourself) HANYA jika berupa perintah bot eksplisit atau angka konfirmasi
+        const isBotCommandKeyword = lowerText.startsWith('!') ||
+                                    ['menu', 'lapor', 'rekap', 'pb', 'batal'].includes(lowerText) ||
+                                    /^\d+$/.test(lowerText);
         const botUserNumber = sock.user?.id ? normalizeNumber(sock.user.id) : '';
         const isSelfChat = m.key.fromMe && (normalizeNumber(sender) === botUserNumber || sender.endsWith('@lid'));
 
@@ -100,12 +107,10 @@ async function startBot() {
                 if (!isAllowed(senderNumber)) {
                     const wl = loadWhitelist();
                     await sock.sendMessage(sender, {
-                        text: `⚠️ Maaf, nomor Anda (*${normalizeNumber(senderNumber)}*) belum terdaftar untuk mengupload data ke bot.\nSilakan hubungi Admin (${wl.admin}).`
+                        text: `⚠️ Maaf, nomor Anda (*${normSender}*) belum terdaftar untuk mengupload data ke bot.\nSilakan hubungi Super Admin (${wl.super_admins?.[0] || wl.admin}).`
                     });
                     return;
                 }
-
-                await sock.sendMessage(sender, { text: `⏳ Mengunduh dan menganalisa dokumen pareto baru (*${doc.fileName}*)...` });
 
                 try {
                     const buffer = await downloadMediaMessage(m, 'buffer', {});
@@ -113,36 +118,342 @@ async function startBot() {
                     const savedPath = `pareto_uploaded_${Date.now()}${ext}`;
                     fs.writeFileSync(savedPath, buffer);
 
-                    const analysis = analyzePareto(savedPath);
-                    const summaryText = getPbSummaryText(analysis);
-                    const excelOutput = `Laporan_PB_Pareto_${Date.now()}.xlsx`;
-                    await generatePbExcel(analysis, excelOutput);
+                    const cfg = loadConfig();
+                    const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
 
-                    await sock.sendMessage(sender, { text: summaryText });
-                    await sock.sendMessage(sender, {
-                        document: fs.readFileSync(excelOutput),
-                        mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                        fileName: `Laporan_PB_Pareto_${new Date().toLocaleDateString('id-ID').replace(/[\/\s]/g, '-')}.xlsx`,
-                        caption: `📊 *Hasil Analisa Dokumen Pareto Baru*\nFile Excel rekomendasi restock ${analysis.totalKritis} item kritis siap kirim ke supplier.`
+                    // Cek apakah user langsung menentukan angka ambang batas pada caption, cth: "!pb 5" atau "!pb 15"
+                    const directMatch = cleanText.match(/^!pb\s+(\d+)$/i);
+                    if (directMatch) {
+                        const directThreshold = parseInt(directMatch[1]);
+                        await sock.sendMessage(sender, {
+                            text: `⏳ Mengunduh dan menganalisa dokumen pareto *${doc.fileName}* (Ambang Batas Stok <= *${directThreshold} pcs*)...`
+                        });
+
+                        const analysis = analyzePareto(savedPath, directThreshold);
+                        const summaryText = getPbSummaryText(analysis, 10, storeInfo);
+                        const excelOutput = `Laporan_PB_Pareto_${Date.now()}.xlsx`;
+                        await generatePbExcel(analysis, excelOutput, storeInfo);
+
+                        await sock.sendMessage(sender, { text: summaryText });
+                        await sock.sendMessage(sender, {
+                            document: fs.readFileSync(excelOutput),
+                            mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                            fileName: `Laporan_PB_Pareto_${new Date().toLocaleDateString('id-ID').replace(/[\/\s]/g, '-')}.xlsx`,
+                            caption: `📊 *Hasil Analisa Dokumen Pareto (Batas: <= ${directThreshold} pcs)*\nFile Excel rekomendasi restock ${analysis.totalKritis} item kritis siap kirim ke supplier.`
+                        });
+
+                        try { fs.unlinkSync(excelOutput); } catch (_) {}
+                        return;
+                    }
+
+                    // ALUR KONFIRMASI INTERAKTIF:
+                    // Simpan file sementara dan minta user menentukan ambang batas stok
+                    if (pendingParetoUploads.has(normSender)) {
+                        const old = pendingParetoUploads.get(normSender);
+                        try { fs.unlinkSync(old.filePath); } catch (_) {}
+                    }
+
+                    pendingParetoUploads.set(normSender, {
+                        filePath: savedPath,
+                        fileName: doc.fileName || 'Dokumen Pareto',
+                        timestamp: Date.now()
                     });
 
-                    // Hapus file sementara setelah dikirim
-                    try { fs.unlinkSync(excelOutput); } catch (_) {}
+                    const defaultStok = cfg.ambang_stok_pb || 10;
+                    const promptText = `📥 *DOKUMEN PARETO DITERIMA!*\n` +
+                        `• File: *${doc.fileName}*\n\n` +
+                        `Silakan ketik angka ambang batas sisa stok yang ingin dianalisa:\n` +
+                        `1️⃣ Ketik *${defaultStok}* : Analisa item kritis (Stok <= ${defaultStok} pcs) [Standar]\n` +
+                        `2️⃣ Ketik *5*  : Analisa item sangat kritis (Stok <= 5 pcs) [Urgent]\n` +
+                        `3️⃣ Ketik *angka lain* (misal: *15*, *20*) sesuai kebutuhan analisa toko\n` +
+                        `4️⃣ Ketik *batal* : Batalkan analisa dokumen ini\n\n` +
+                        `⏳ _Kirimkan angka ambang batas stok untuk melanjutkan analisa..._`;
+
+                    await sock.sendMessage(sender, { text: promptText });
                     return;
                 } catch (err) {
                     console.error('Error memproses dokumen pareto:', err);
-                    await sock.sendMessage(sender, { text: `❌ Terjadi kesalahan saat membaca file pareto: ${err.message}` });
+                    await sock.sendMessage(sender, { text: `❌ Terjadi kesalahan saat memproses file pareto: ${err.message}` });
                     return;
                 }
             }
         }
 
         // ============================================================
-        // 2. PERINTAH MANAJEMEN WHITELIST (KHUSUS ADMIN)
+        // 1.1 RESPONS ALUR KONFIRMASI INTERAKTIF PARETO
         // ============================================================
+        if (pendingParetoUploads.has(normSender)) {
+            const pending = pendingParetoUploads.get(normSender);
+
+            // Timeout 10 menit
+            if (Date.now() - pending.timestamp > 10 * 60 * 1000) {
+                try { fs.unlinkSync(pending.filePath); } catch (_) {}
+                pendingParetoUploads.delete(normSender);
+            } else if (lowerText === 'batal') {
+                try { fs.unlinkSync(pending.filePath); } catch (_) {}
+                pendingParetoUploads.delete(normSender);
+                await sock.sendMessage(sender, { text: `❌ Analisa dokumen pareto *${pending.fileName}* telah dibatalkan.` });
+                return;
+            } else if (/^\d+$/.test(lowerText)) {
+                const chosenThreshold = parseInt(lowerText);
+                if (chosenThreshold <= 0 || chosenThreshold > 500) {
+                    await sock.sendMessage(sender, { text: `⚠️ Harap masukkan angka ambang batas stok yang wajar (1 - 500) atau ketik *batal*.` });
+                    return;
+                }
+
+                pendingParetoUploads.delete(normSender);
+                await sock.sendMessage(sender, {
+                    text: `⏳ Sedang menganalisa dokumen *${pending.fileName}* dengan ambang batas stok <= *${chosenThreshold} pcs*...`
+                });
+
+                try {
+                    const cfg = loadConfig();
+                    const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
+                    const analysis = analyzePareto(pending.filePath, chosenThreshold);
+                    const summaryText = getPbSummaryText(analysis, 10, storeInfo);
+                    const excelOutput = `Laporan_PB_Pareto_${Date.now()}.xlsx`;
+                    await generatePbExcel(analysis, excelOutput, storeInfo);
+
+                    await sock.sendMessage(sender, { text: summaryText });
+                    await sock.sendMessage(sender, {
+                        document: fs.readFileSync(excelOutput),
+                        mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        fileName: `Laporan_PB_Pareto_${new Date().toLocaleDateString('id-ID').replace(/[\/\s]/g, '-')}.xlsx`,
+                        caption: `📊 *Hasil Analisa Dokumen Pareto (Batas: <= ${chosenThreshold} pcs)*\nFile Excel rekomendasi restock ${analysis.totalKritis} item kritis siap kirim ke supplier.`
+                    });
+
+                    try { fs.unlinkSync(excelOutput); } catch (_) {}
+                    return;
+                } catch (err) {
+                    console.error('Error saat analisa interaktif:', err);
+                    await sock.sendMessage(sender, { text: `❌ Terjadi kesalahan analisa pareto: ${err.message}` });
+                    return;
+                }
+            } else {
+                // Jika user mengetik perintah bot lain, bersihkan pending upload agar tidak tersangkut
+                if (lowerText.startsWith('!') || ['menu', 'lapor', 'rekap', 'pb'].includes(lowerText)) {
+                    try { fs.unlinkSync(pending.filePath); } catch (_) {}
+                    pendingParetoUploads.delete(normSender);
+                } else {
+                    await sock.sendMessage(sender, {
+                        text: `⚠️ Mohon ketik angka ambang batas stok (misal: *10*, *5*, *15*), atau ketik *batal* untuk membatalkan analisa file *${pending.fileName}*.`
+                    });
+                    return;
+                }
+            }
+        }
+
+        // ============================================================
+        // 2. PERINTAH KHUSUS SUPER ADMIN
+        // ============================================================
+
+        // 2.1 PENGATURAN TOKO & KONFIGURASI (!setting / !pengaturan)
+        if (lowerText === '!setting' || lowerText === '!pengaturan' || lowerText === '!config') {
+            if (!isSuperAdmin(senderNumber)) {
+                await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
+                return;
+            }
+            await sock.sendMessage(sender, { text: getConfigSummary() });
+            return;
+        }
+
+        // 2.2 UBAH TARGET SPD (!settarget [nominal])
+        if (lowerText.startsWith('!settarget')) {
+            if (!isSuperAdmin(senderNumber)) {
+                await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
+                return;
+            }
+            const parts = cleanText.split(/\s+/);
+            const targetVal = parseNominal(parts[1]);
+            if (!targetVal || targetVal < 100000) {
+                await sock.sendMessage(sender, { text: '⚠️ Format salah. Contoh: *!settarget 5000000* atau *!settarget 4.725.000*' });
+                return;
+            }
+            updateConfig({ target_spd: targetVal });
+            await sock.sendMessage(sender, { text: `✅ Target SPD harian toko berhasil diubah menjadi: *Rp ${formatRp(targetVal)}*` });
+            return;
+        }
+
+        // 2.3 UBAH TARGET RAB LENGKAP (!setrab [spd] [std] [apc] [gm])
+        if (lowerText.startsWith('!setrab')) {
+            if (!isSuperAdmin(senderNumber)) {
+                await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
+                return;
+            }
+            const parts = cleanText.split(/\s+/);
+            if (parts.length < 5) {
+                await sock.sendMessage(sender, {
+                    text: `⚠️ Format salah. Gunakan format:\n*!setrab [SPD] [STD] [APC] [GM%]*\nContoh: *!setrab 4725000 135 35000 21.00*`
+                });
+                return;
+            }
+            const spd = parseNominal(parts[1]);
+            const std = parseNominal(parts[2]);
+            const apc = parseNominal(parts[3]);
+            const gm = parts[4].replace(/%/g, '').trim();
+
+            if (!spd || !std || !apc || !gm) {
+                await sock.sendMessage(sender, { text: '⚠️ Nilai angka target RAB tidak valid. Mohon periksa kembali!' });
+                return;
+            }
+
+            updateConfig({ target_spd: spd, target_std: std, target_apc: apc, target_gm: gm });
+            await sock.sendMessage(sender, {
+                text: `✅ *Target RAB Berhasil Diperbarui!*\n\n• Target SPD : Rp ${formatRp(spd)}\n• Target STD : ${std}\n• Target APC : Rp ${formatRp(apc)}\n• Target GM% : ${gm}%`
+            });
+            return;
+        }
+
+        // 2.4 UBAH PROFIL TOKO (!settoko [Nama] | [Kode] | [Cabang])
+        if (lowerText.startsWith('!settoko')) {
+            if (!isSuperAdmin(senderNumber)) {
+                await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
+                return;
+            }
+            const payload = cleanText.slice('!settoko'.length).trim();
+            const parts = payload.split('|').map(s => s.trim());
+            if (parts.length < 3 || !parts[0] || !parts[1] || !parts[2]) {
+                await sock.sendMessage(sender, {
+                    text: '⚠️ Format salah. Pisahkan dengan tanda |\nContoh: *!settoko OMI TITAN EKSEKUTIF MART | O8BM | BEKASI*'
+                });
+                return;
+            }
+            updateConfig({ nama_toko: parts[0], kode_toko: parts[1], cabang: parts[2] });
+            await sock.sendMessage(sender, {
+                text: `✅ *Profil Toko Berhasil Diperbarui!*\n\n• Nama Toko : *${parts[0]}*\n• Kode Toko : *${parts[1]}*\n• Cabang    : *${parts[2]}*`
+            });
+            return;
+        }
+
+        // 2.5 UBAH DEFAULT AMBANG BATAS STOK PARETO (!setstok [angka])
+        if (lowerText.startsWith('!setstok')) {
+            if (!isSuperAdmin(senderNumber)) {
+                await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
+                return;
+            }
+            const parts = cleanText.split(/\s+/);
+            const stok = parseInt(parts[1]);
+            if (!stok || stok <= 0 || stok > 500) {
+                await sock.sendMessage(sender, { text: '⚠️ Format salah. Masukkan angka wajar (1 - 500).\nContoh: *!setstok 10* atau *!setstok 5*' });
+                return;
+            }
+            updateConfig({ ambang_stok_pb: stok });
+            await sock.sendMessage(sender, { text: `✅ Default ambang batas stok kritis PB berhasil diubah menjadi: *<= ${stok} pcs*` });
+            return;
+        }
+
+        // 2.6 ATUR PENGINGAT CLOSING (!setreminder [jam:menit / off / on])
+        if (lowerText.startsWith('!setreminder')) {
+            if (!isSuperAdmin(senderNumber)) {
+                await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
+                return;
+            }
+            const parts = cleanText.split(/\s+/);
+            const arg = (parts[1] || '').toLowerCase();
+
+            if (arg === 'off') {
+                updateConfig({ reminder_closing_enabled: false });
+                await sock.sendMessage(sender, { text: '✅ Pengingat closing harian telah *DINONAKTIFKAN*.' });
+                return;
+            }
+
+            if (arg === 'on') {
+                updateConfig({ reminder_closing_enabled: true });
+                const cfg = loadConfig();
+                await sock.sendMessage(sender, {
+                    text: `✅ Pengingat closing harian telah *DIAKTIFKAN* (Pukul ${String(cfg.reminder_closing_jam).padStart(2, '0')}:${String(cfg.reminder_closing_menit).padStart(2, '0')} WIB).`
+                });
+                return;
+            }
+
+            const timeMatch = arg.match(/^(\d{1,2})[:.](\d{1,2})$/);
+            if (timeMatch) {
+                const jam = parseInt(timeMatch[1]);
+                const menit = parseInt(timeMatch[2]);
+                if (jam >= 0 && jam <= 23 && menit >= 0 && menit <= 59) {
+                    updateConfig({ reminder_closing_enabled: true, reminder_closing_jam: jam, reminder_closing_menit: menit });
+                    await sock.sendMessage(sender, {
+                        text: `✅ Pengingat closing harian diatur ke pukul *${String(jam).padStart(2, '0')}:${String(menit).padStart(2, '0')} WIB* (Status: Aktif).`
+                    });
+                    return;
+                }
+            }
+
+            await sock.sendMessage(sender, {
+                text: '⚠️ Format salah. Contoh penggunaan:\n• *!setreminder 21:45*\n• *!setreminder off*\n• *!setreminder on*'
+            });
+            return;
+        }
+
+        // 2.7 ATUR JAM REKAP BULANAN OTOMATIS (!setjam [jam:menit])
+        if (lowerText.startsWith('!setjam')) {
+            if (!isSuperAdmin(senderNumber)) {
+                await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
+                return;
+            }
+            const parts = cleanText.split(/\s+/);
+            const arg = parts[1] || '';
+            const timeMatch = arg.match(/^(\d{1,2})[:.](\d{1,2})$/);
+            if (timeMatch) {
+                const jam = parseInt(timeMatch[1]);
+                const menit = parseInt(timeMatch[2]);
+                if (jam >= 0 && jam <= 23 && menit >= 0 && menit <= 59) {
+                    updateConfig({ jam_rekap_otomatis: jam, menit_rekap_otomatis: menit });
+                    await sock.sendMessage(sender, {
+                        text: `✅ Jadwal pengiriman rekap bulanan otomatis diatur ke pukul *${String(jam).padStart(2, '0')}:${String(menit).padStart(2, '0')} WIB*.`
+                    });
+                    return;
+                }
+            }
+            await sock.sendMessage(sender, { text: '⚠️ Format salah. Contoh: *!setjam 23:00*' });
+            return;
+        }
+
+        // 2.8 ATUR VALIDASI RENTANG SPD (!setvalidasi [min] [max])
+        if (lowerText.startsWith('!setvalidasi')) {
+            if (!isSuperAdmin(senderNumber)) {
+                await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
+                return;
+            }
+            const parts = cleanText.split(/\s+/);
+            const min = parseNominal(parts[1]);
+            const max = parseNominal(parts[2]);
+            if (!min || !max || min >= max) {
+                await sock.sendMessage(sender, { text: '⚠️ Format salah. Contoh: *!setvalidasi 1000000 20000000*' });
+                return;
+            }
+            updateConfig({ validasi_spd_min: min, validasi_spd_max: max });
+            await sock.sendMessage(sender, {
+                text: `✅ Rentang validasi SPD wajar diperbarui: *Rp ${formatRp(min)}* s/d *Rp ${formatRp(max)}*`
+            });
+            return;
+        }
+
+        // 2.9 RESET DATA BULANAN (!resetdata)
+        if (lowerText === '!resetdata') {
+            if (!isSuperAdmin(senderNumber)) {
+                await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
+                return;
+            }
+            if (fs.existsSync('rekap_data.json')) {
+                const oldContent = fs.readFileSync('rekap_data.json', 'utf8');
+                const backupName = `rekap_data_backup_${Date.now()}.json`;
+                fs.writeFileSync(backupName, oldContent);
+                fs.writeFileSync('rekap_data.json', '[]');
+                await sock.sendMessage(sender, {
+                    text: `✅ Seluruh data rekap bulanan berhasil direset ke 0.\n📁 File cadangan disimpan otomatis: *${backupName}*.\nSistem siap mencatat periode baru!`
+                });
+            } else {
+                fs.writeFileSync('rekap_data.json', '[]');
+                await sock.sendMessage(sender, { text: '✅ Database rekap telah disiapkan kosong.' });
+            }
+            return;
+        }
+
+        // 2.10 MANAJEMEN WHITELIST (TAMBAH / HAPUS / LIST)
         if (lowerText.startsWith('!tambahnomor')) {
-            if (!isAdmin(senderNumber)) {
-                await sock.sendMessage(sender, { text: '⚠️ Perintah ini hanya dapat dijalankan oleh Admin Utama.' });
+            if (!isSuperAdmin(senderNumber)) {
+                await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
 
@@ -151,7 +462,7 @@ async function startBot() {
             const targetName = parts.slice(2).join(' ') || 'Karyawan Toko';
 
             if (!targetNumber) {
-                await sock.sendMessage(sender, { text: '⚠️ Format salah. Contoh penggunaan:\n*!tambahnomor 08123456789 Budi*' });
+                await sock.sendMessage(sender, { text: '⚠️ Format salah. Contoh:\n*!tambahnomor 08123456789 Budi*' });
                 return;
             }
 
@@ -161,8 +472,8 @@ async function startBot() {
         }
 
         if (lowerText.startsWith('!hapusnomor')) {
-            if (!isAdmin(senderNumber)) {
-                await sock.sendMessage(sender, { text: '⚠️ Perintah ini hanya dapat dijalankan oleh Admin Utama.' });
+            if (!isSuperAdmin(senderNumber)) {
+                await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
 
@@ -170,7 +481,7 @@ async function startBot() {
             const targetNumber = parts[1];
 
             if (!targetNumber) {
-                await sock.sendMessage(sender, { text: '⚠️ Format salah. Contoh penggunaan:\n*!hapusnomor 08123456789*' });
+                await sock.sendMessage(sender, { text: '⚠️ Format salah. Contoh:\n*!hapusnomor 08123456789*' });
                 return;
             }
 
@@ -180,8 +491,8 @@ async function startBot() {
         }
 
         if (lowerText === '!listnomor' || lowerText === '!whitelist') {
-            if (!isAdmin(senderNumber)) {
-                await sock.sendMessage(sender, { text: '⚠️ Perintah ini hanya dapat dilihat oleh Admin Utama.' });
+            if (!isSuperAdmin(senderNumber)) {
+                await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
 
@@ -190,15 +501,15 @@ async function startBot() {
         }
 
         // ============================================================
-        // 3. PEMERIKSAAN HAK AKSES WHITELIST UNTUK FITUR UTAMA
+        // 3. PEMERIKSAAN HAK AKSES WHITELIST UNTUK FITUR OPERASIONAL
         // ============================================================
-        const botCommands = ['menu', 'lapor', '!menu', '!kirimlaporan', '!rekap', 'rekap', '!pb', '!hapusdata'];
+        const botCommands = ['menu', 'lapor', '!menu', '!kirimlaporan', '!rekap', 'rekap', '!pb', 'pb', '!hapusdata'];
         const isBotCommand = botCommands.some(cmd => lowerText.startsWith(cmd));
 
         if (isBotCommand && !isAllowed(senderNumber)) {
             const wl = loadWhitelist();
             await sock.sendMessage(sender, {
-                text: `⚠️ Maaf, nomor Anda (*${normalizeNumber(senderNumber)}*) belum terdaftar untuk menggunakan bot ini.\nSilakan hubungi Admin (${wl.admin}) untuk pendaftaran akses.`
+                text: `⚠️ Maaf, nomor Anda (*${normSender}*) belum terdaftar untuk menggunakan bot ini.\nSilakan hubungi Super Admin (${wl.super_admins?.[0] || wl.admin}) untuk pendaftaran akses.`
             });
             return;
         }
@@ -207,7 +518,10 @@ async function startBot() {
         // 4. MENU & FORMAT LAPORAN
         // ============================================================
         if (lowerText === 'lapor' || lowerText === 'menu' || lowerText === '!menu') {
-            const templatePesan = `Halo! Silakan salin dan isi data laporan di bawah ini, lalu kirim kembali:\n\n!kirimlaporan
+            const isSuper = isSuperAdmin(senderNumber);
+            const cfg = loadConfig();
+
+            let templatePesan = `Halo! Silakan salin dan isi data laporan di bawah ini, lalu kirim kembali:\n\n!kirimlaporan
 SPD: 
 STD: 
 APC: 
@@ -227,11 +541,29 @@ NBH:
 Total MPP: 
 Total NBH: 
 
-💡 *Perintah Tersedia:*
+💡 *Fitur & Perintah Operasional:*
 - *!rekap* : Ringkasan performa penjualan & SO bulan ini
 - *!rekap excel* : Unduh file Excel rekapitulasi harian lengkap
-- *!pb* : Analisa ringkasan stok pareto kritis (stok <= 10)
-- *!pb excel* : Unduh file Excel rekomendasi restock suplier`;
+- *!pb* : Analisa ringkasan stok pareto kritis (default <= ${cfg.ambang_stok_pb} pcs)
+- *!pb [angka]* : Analisa pareto dengan batas stok kustom (cth: *!pb 5*)
+- *!pb excel* : Unduh file Excel rekomendasi restock suplier
+- *Upload Dokumen (.xls/.xlsx)* : Analisa interaktif dengan pilihan batas stok
+- *!hapusdata* : Koreksi/hapus laporan hari ini jika ada salah ketik`;
+
+            if (isSuper) {
+                templatePesan += `\n\n👑 *Menu Khusus Super Admin:*
+- *!setting* : Lihat & kelola pengaturan profil toko & target
+- *!settarget [nominal]* : Ubah target SPD harian
+- *!setrab [spd] [std] [apc] [gm]* : Ubah 4 target RAB toko
+- *!settoko [Nama] | [Kode] | [Cabang]* : Ubah profil toko
+- *!setstok [angka]* : Ubah default batas stok kritis PB
+- *!setreminder [jam:menit / off]* : Atur jadwal pengingat closing
+- *!listnomor* : Kelola nomor akses Super Admin & Admin Biasa
+- *!tambahnomor [no] [nama]* : Daftarkan Admin Biasa baru
+- *!hapusnomor [no]* : Hapus nomor admin
+- *!resetdata* : Reset data rekap bulanan baru`;
+            }
+
             await sock.sendMessage(sender, { text: templatePesan });
             return;
         }
@@ -239,24 +571,42 @@ Total NBH:
         // ============================================================
         // 5. FITUR PB (PERMINTAAN BARANG) & ANALISA PARETO
         // ============================================================
-        if (lowerText === '!pb' || lowerText === 'pb') {
-            const latestFile = getLatestParetoFile('.');
-            if (!latestFile) {
-                await sock.sendMessage(sender, {
-                    text: '⚠️ File laporan Pareto (.xls / .xlsx) belum ditemukan di server.\nSilakan kirimkan file Excel Pareto Anda ke chat bot ini.'
-                });
+        if (lowerText === '!pb' || lowerText === 'pb' || lowerText.startsWith('!pb ')) {
+            // Hindari overlap dengan !pb excel
+            if (lowerText.startsWith('!pb excel')) {
+                // Biarkan lanjut ke handler !pb excel di bawah
+            } else {
+                const latestFile = getLatestParetoFile('.');
+                if (!latestFile) {
+                    await sock.sendMessage(sender, {
+                        text: '⚠️ File laporan Pareto (.xls / .xlsx) belum ditemukan di server.\nSilakan kirimkan file Excel Pareto Anda ke chat bot ini.'
+                    });
+                    return;
+                }
+
+                try {
+                    const cfg = loadConfig();
+                    const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
+
+                    // Cek jika user menyertakan angka batas stok kustom, cth: "!pb 5"
+                    const parts = cleanText.split(/\s+/);
+                    let threshold = cfg.ambang_stok_pb || 10;
+                    if (parts.length > 1 && /^\d+$/.test(parts[1])) {
+                        threshold = parseInt(parts[1]);
+                    }
+
+                    await sock.sendMessage(sender, {
+                        text: `⏳ Menganalisa stok pareto toko (Batas sisa stok <= *${threshold} pcs*)...`
+                    });
+
+                    const analysis = analyzePareto(latestFile, threshold);
+                    const summary = getPbSummaryText(analysis, 10, storeInfo);
+                    await sock.sendMessage(sender, { text: summary });
+                } catch (err) {
+                    await sock.sendMessage(sender, { text: `❌ Terjadi kesalahan saat membaca file pareto: ${err.message}` });
+                }
                 return;
             }
-
-            try {
-                await sock.sendMessage(sender, { text: '⏳ Sedang menganalisa stok pareto toko...' });
-                const analysis = analyzePareto(latestFile);
-                const summary = getPbSummaryText(analysis);
-                await sock.sendMessage(sender, { text: summary });
-            } catch (err) {
-                await sock.sendMessage(sender, { text: `❌ Terjadi kesalahan saat membaca file pareto: ${err.message}` });
-            }
-            return;
         }
 
         if (lowerText.startsWith('!pb excel')) {
@@ -269,12 +619,25 @@ Total NBH:
             }
 
             try {
-                await sock.sendMessage(sender, { text: '⏳ Sedang meng-generate file Excel rekomendasi PB...' });
-                const analysis = analyzePareto(latestFile);
+                const cfg = loadConfig();
+                const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
+
+                // Cek kustom threshold jika ada, cth: "!pb excel 5"
+                const parts = cleanText.split(/\s+/);
+                let threshold = cfg.ambang_stok_pb || 10;
+                if (parts.length > 2 && /^\d+$/.test(parts[2])) {
+                    threshold = parseInt(parts[2]);
+                }
+
+                await sock.sendMessage(sender, {
+                    text: `⏳ Sedang meng-generate file Excel rekomendasi PB (Batas stok <= *${threshold} pcs*)...`
+                });
+
+                const analysis = analyzePareto(latestFile, threshold);
                 const options = { day: 'numeric', month: 'long', year: 'numeric' };
                 const todayClean = new Date().toLocaleDateString('id-ID', options).replace(/[\s]/g, '_');
                 const outPath = `Laporan_PB_Pareto_${Date.now()}.xlsx`;
-                await generatePbExcel(analysis, outPath);
+                await generatePbExcel(analysis, outPath, storeInfo);
 
                 await sock.sendMessage(sender, {
                     document: fs.readFileSync(outPath),
@@ -301,6 +664,9 @@ Total NBH:
 
             try {
                 await sock.sendMessage(sender, { text: '⏳ Sedang meng-generate file Excel rekapitulasi performa toko...' });
+                const cfg = loadConfig();
+                const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
+
                 const fileContent = fs.readFileSync('rekap_data.json', 'utf8');
                 const dataList = JSON.parse(fileContent);
 
@@ -308,13 +674,13 @@ Total NBH:
                 const monthClean = new Date().toLocaleDateString('id-ID', options).replace(/[\s]/g, '_');
                 const outPath = `Rekap_Bulanan_${Date.now()}.xlsx`;
 
-                generateRekapExcel(dataList, outPath, TARGET_SPD);
+                generateRekapExcel(dataList, outPath, cfg.target_spd, storeInfo);
 
                 await sock.sendMessage(sender, {
                     document: fs.readFileSync(outPath),
                     mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                     fileName: `Rekap_Bulanan_${monthClean}.xlsx`,
-                    caption: `📊 *File Rekapitulasi Penjualan Harian & Bulanan*\nOMI TITAN EKSEKUTIF MART (O8BM)`
+                    caption: `📊 *File Rekapitulasi Penjualan Harian & Bulanan*\n${cfg.nama_toko} (${cfg.kode_toko})`
                 });
 
                 try { fs.unlinkSync(outPath); } catch (_) {}
@@ -330,9 +696,12 @@ Total NBH:
                 return;
             }
 
+            const cfg = loadConfig();
+            const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
+
             const fileContent = fs.readFileSync('rekap_data.json', 'utf8');
             const dataList = JSON.parse(fileContent);
-            const pesanRekap = getStructuredTextRekap(dataList, TARGET_SPD);
+            const pesanRekap = getStructuredTextRekap(dataList, cfg.target_spd, storeInfo);
             await sock.sendMessage(sender, { text: pesanRekap });
             return;
         }
@@ -382,6 +751,8 @@ Total NBH:
             const spd = extractValue('SPD');
             if (!spd) return;
 
+            const cfg = loadConfig();
+
             const std = extractValue('STD');
             const apc = extractValue('APC');
             const mgrp = extractValue('MGRP');
@@ -400,11 +771,14 @@ Total NBH:
             const totalMpp = extractValue('Total MPP');
             const totalNbh = extractValue('Total NBH');
 
-            // --- VALIDASI ANGKA SPD SECARA PRESISI ---
+            // --- VALIDASI ANGKA SPD SECARA DINAMIS DARI CONFIG ---
             const numSpd = parseNominal(spd);
-            if (numSpd < 1000000 || numSpd > 20000000) {
+            const minSpd = cfg.validasi_spd_min || 1000000;
+            const maxSpd = cfg.validasi_spd_max || 20000000;
+
+            if (numSpd < minSpd || numSpd > maxSpd) {
                 await sock.sendMessage(sender, {
-                    text: `⚠️ *Peringatan Anomali Data!*\n\nNilai SPD yang kamu masukkan (*${spd}*) terlihat tidak wajar atau salah ketik. Pastikan memasukkan nominal angka rupiah harian dengan benar (kisaran wajar 1 juta - 20 juta). Mohon kirim ulang!`
+                    text: `⚠️ *Peringatan Anomali Data!*\n\nNilai SPD yang Anda masukkan (*${spd}*) terlihat tidak wajar atau salah ketik.\nBatas wajar sistem saat ini: *Rp ${formatRp(minSpd)}* s/d *Rp ${formatRp(maxSpd)}*.\nMohon periksa dan kirim ulang laporan Anda!`
                 });
                 return;
             }
@@ -432,11 +806,12 @@ Total NBH:
             const options = { day: 'numeric', month: 'long', year: 'numeric' };
             const today = new Date().toLocaleDateString('id-ID', options);
 
-            // Perhitungan Persentase ACH Harian & MTD yang akurat
-            const achHarian = ((numSpd / TARGET_SPD) * 100).toFixed(2);
+            // Perhitungan Persentase ACH Harian & MTD yang akurat berdasarkan config
+            const targetSpd = cfg.target_spd || 4725000;
+            const achHarian = ((numSpd / targetSpd) * 100).toFixed(2);
             const achMtd = numAvgSpd > 0
-                ? ((numAvgSpd / TARGET_SPD) * 100).toFixed(2)
-                : ((numSpd / TARGET_SPD) * 100).toFixed(2);
+                ? ((numAvgSpd / targetSpd) * 100).toFixed(2)
+                : ((numSpd / targetSpd) * 100).toFixed(2);
 
             // --- SIMPAN / TIMPA DATA KE FILE REKAP OTOMATIS ---
             const dataBaru = {
@@ -471,24 +846,24 @@ Total NBH:
             semuaData.push(dataBaru);
             fs.writeFileSync('rekap_data.json', JSON.stringify(semuaData, null, 2));
 
-            // Format Pesan Balasan Resmi
+            // Format Pesan Balasan Resmi Berdasarkan Konfigurasi Dinamis Toko
             const laporanTeks = `LAPORAN PERFORMANCE GO    
 
-TGL Grand OPENING   : 26 FEBRUARI 2026
-Type Harga : 7
+TGL Grand OPENING   : ${cfg.tgl_grand_opening}
+Type Harga : ${cfg.type_harga}
 
-NAMA TOKO : OMI TITAN EKSEKUTIF MART
-KODE TOKO  : O8BM
-CABANG         : BEKASI
+NAMA TOKO : ${cfg.nama_toko}
+KODE TOKO  : ${cfg.kode_toko}
+CABANG         : ${cfg.cabang}
 
 ================================
 
 TARGET RAB     
 
-SPD : 4.725.000
-STD : 135
-APC : 35.000
-GM : 21.00
+SPD : ${formatRp(cfg.target_spd)}
+STD : ${cfg.target_std}
+APC : ${formatRp(cfg.target_apc)}
+GM : ${cfg.target_gm}
 
 ================================
 Sales Tanggal  : ${today}
@@ -535,56 +910,110 @@ Terima kasih 🙏`;
 }
 
 /**
- * Scheduler Pengiriman Otomatis Rekap Bulanan Setiap Akhir Bulan Pukul 23:00
+ * Scheduler:
+ * 1. Pengingat Closing Harian ke Admin/Karyawan (Pukul yang diatur di config, default 21:45 WIB)
+ * 2. Pengiriman Otomatis Rekap Bulanan Setiap Akhir Bulan ke Super Admin
  */
 function setupScheduler(sock) {
     let lastSentMonth = '';
+    let lastReminderDate = '';
 
     setInterval(async () => {
         try {
             const now = new Date();
             const currentHour = now.getHours();
             const currentMinute = now.getMinutes();
+            const todayDateStr = now.toDateString();
+            const cfg = loadConfig();
 
-            // Cek apakah hari ini adalah hari terakhir dalam bulan ini
+            // 1. PENGINGAT CLOSING HARIAN
+            if (cfg.reminder_closing_enabled &&
+                currentHour === cfg.reminder_closing_jam &&
+                Math.abs(currentMinute - cfg.reminder_closing_menit) <= 2 &&
+                lastReminderDate !== todayDateStr) {
+
+                lastReminderDate = todayDateStr;
+                const wl = loadWhitelist();
+                const reminderText = `🔔 *PENGINGAT CLOSING TOKO (${String(cfg.reminder_closing_jam).padStart(2, '0')}:${String(cfg.reminder_closing_menit).padStart(2, '0')} WIB)* 🔔\n\n` +
+                    `Kepada seluruh rekan tim operasional & kasir *${cfg.nama_toko}*:\n` +
+                    `Waktu closing operasional harian telah tiba. Mohon segera hitung data kasir, SO harian, lalu kirimkan laporan harian menggunakan format:\n\n` +
+                    `Ketik *menu* untuk menyalin template laporan.\nTerima kasih atas dedikasi dan kerja keras hari ini! 🙏`;
+
+                const recipients = new Set();
+                if (wl.users && Array.isArray(wl.users)) {
+                    wl.users.forEach(u => {
+                        const clean = normalizeNumber(u.number);
+                        if (clean && clean.length >= 10 && !clean.startsWith('16877')) {
+                            recipients.add(`${clean}@s.whatsapp.net`);
+                        }
+                    });
+                }
+
+                for (const jid of recipients) {
+                    try {
+                        await sock.sendMessage(jid, { text: reminderText });
+                    } catch (e) {
+                        console.error('Gagal mengirim reminder closing ke:', jid, e.message);
+                    }
+                }
+                console.log(`📢 Reminder closing harian (${todayDateStr}) terkirim ke ${recipients.size} pengguna.`);
+            }
+
+            // 2. REKAP BULANAN OTOMATIS AKHIR BULAN
             const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
             const isLastDayOfMonth = tomorrow.getDate() === 1;
-
             const monthKey = `${now.getFullYear()}-${now.getMonth() + 1}`;
 
-            // Pukul 23:00 - 23:15 pada hari terakhir bulan
-            if (isLastDayOfMonth && currentHour === 23 && currentMinute < 15 && lastSentMonth !== monthKey) {
+            const targetHour = cfg.jam_rekap_otomatis !== undefined ? cfg.jam_rekap_otomatis : 23;
+            const targetMin = cfg.menit_rekap_otomatis !== undefined ? cfg.menit_rekap_otomatis : 0;
+
+            if (isLastDayOfMonth && currentHour === targetHour && Math.abs(currentMinute - targetMin) <= 4 && lastSentMonth !== monthKey) {
                 if (fs.existsSync('rekap_data.json')) {
                     const content = fs.readFileSync('rekap_data.json', 'utf8');
                     const list = JSON.parse(content);
 
                     if (list.length > 0) {
                         const wl = loadWhitelist();
-                        const adminJid = `${wl.admin}@s.whatsapp.net`;
-
                         const options = { month: 'long', year: 'numeric' };
                         const monthName = now.toLocaleDateString('id-ID', options);
                         const outPath = `Rekap_Bulanan_Otomatis_${monthKey}.xlsx`;
+                        const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
 
-                        generateRekapExcel(list, outPath, TARGET_SPD);
+                        generateRekapExcel(list, outPath, cfg.target_spd, storeInfo);
 
-                        await sock.sendMessage(adminJid, {
-                            document: fs.readFileSync(outPath),
-                            mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                            fileName: `Rekap_Bulanan_${monthName.replace(/\s+/g, '_')}.xlsx`,
-                            caption: `📢 *REKAP OTOMATIS AKHIR BULAN TELAH SIAP!*\n\nBerikut rekapitulasi data penjualan toko OMI TITAN EKSEKUTIF MART periode *${monthName}*.\nTerima kasih atas kerja keras seluruh tim bulan ini! 🙏`
-                        });
+                        const superAdminRecipients = new Set();
+                        if (wl.super_admins && Array.isArray(wl.super_admins)) {
+                            wl.super_admins.forEach(sa => {
+                                const clean = normalizeNumber(sa);
+                                if (clean && clean.length >= 10 && !clean.startsWith('16877')) {
+                                    superAdminRecipients.add(`${clean}@s.whatsapp.net`);
+                                }
+                            });
+                        }
+
+                        for (const adminJid of superAdminRecipients) {
+                            try {
+                                await sock.sendMessage(adminJid, {
+                                    document: fs.readFileSync(outPath),
+                                    mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                    fileName: `Rekap_Bulanan_${monthName.replace(/\s+/g, '_')}.xlsx`,
+                                    caption: `📢 *REKAP OTOMATIS AKHIR BULAN TELAH SIAP!*\n\nBerikut rekapitulasi data penjualan toko ${cfg.nama_toko} periode *${monthName}*.\nTerima kasih atas kerja keras seluruh tim bulan ini! 🙏`
+                                });
+                            } catch (e) {
+                                console.error('Gagal mengirim rekap bulanan ke super admin:', adminJid, e.message);
+                            }
+                        }
 
                         try { fs.unlinkSync(outPath); } catch (_) {}
                         lastSentMonth = monthKey;
-                        console.log(`✅ Rekap akhir bulan otomatis ${monthKey} berhasil dikirim ke Admin.`);
+                        console.log(`✅ Rekap akhir bulan otomatis ${monthKey} berhasil dikirim ke Super Admin.`);
                     }
                 }
             }
         } catch (e) {
-            console.error('Error pada scheduler rekap otomatis:', e);
+            console.error('Error pada scheduler bot:', e);
         }
-    }, 5 * 60 * 1000); // Evaluasi tiap 5 menit
+    }, 60 * 1000); // Evaluasi tiap 1 menit
 }
 
 startBot();

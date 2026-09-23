@@ -1,0 +1,19 @@
+{
+  "nama_toko": "OMI TITAN EKSEKUTIF MART",
+  "kode_toko": "O8BM",
+  "cabang": "BEKASI",
+  "tgl_grand_opening": "26 FEBRUARI 2026",
+  "type_harga": "7",
+  "target_spd": 4725000,
+  "target_std": 135,
+  "target_apc": 35000,
+  "target_gm": "21.00",
+  "ambang_stok_pb": 10,
+  "reminder_closing_enabled": true,
+  "reminder_closing_jam": 21,
+  "reminder_closing_menit": 45,
+  "jam_rekap_otomatis": 23,
+  "menit_rekap_otomatis": 0,
+  "validasi_spd_min": 1000000,
+  "validasi_spd_max": 20000000
+}

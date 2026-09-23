@@ -130,7 +130,7 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
             statusKritis = '🟠 SANGAT KRITIS (1-5)';
             prioritasLevel = 2;
         } else if (qtyStock <= maxStockThreshold) {
-            statusKritis = '🟡 MENIPIS (6-10)';
+            statusKritis = maxStockThreshold === 10 ? '🟡 MENIPIS (6-10)' : `🟡 MENIPIS (6-${maxStockThreshold})`;
             prioritasLevel = 3;
         }
 
@@ -160,7 +160,7 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
     });
 
     const totalKosong = lowStockItems.filter(i => i.qtyStock <= 0).length;
-    const totalSangatKritis = lowStockItems.filter(i => i.qtyStock > 0 && i.qtyStock <= 5).length;
+    const totalSangatKritis = lowStockItems.filter(i => i.qtyStock > 0 && i.qtyStock <= Math.min(5, maxStockThreshold)).length;
     const totalMenipis = lowStockItems.filter(i => i.qtyStock > 5 && i.qtyStock <= maxStockThreshold).length;
 
     return {
@@ -170,6 +170,7 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
         totalSangatKritis,
         totalMenipis,
         lowStockItems,
+        maxStockThreshold,
         fileName: path.basename(filePath)
     };
 }
@@ -177,11 +178,15 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
 /**
  * Generate File Excel Rekomendasi PB dengan Tampilan Bewarna, Rapi, & Elegan
  */
-export async function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_Pareto.xlsx') {
-    const { lowStockItems, totalItem, totalKritis, totalKosong, totalSangatKritis, totalMenipis, fileName } = analysisResult;
+export async function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_Pareto.xlsx', storeInfo = null) {
+    const { lowStockItems, totalItem, totalKritis, totalKosong, totalSangatKritis, totalMenipis, maxStockThreshold = 10, fileName } = analysisResult;
+
+    const namaToko = storeInfo?.nama_toko || storeInfo?.nama || 'OMI TITAN EKSEKUTIF MART';
+    const kodeToko = storeInfo?.kode_toko || storeInfo?.kode || 'O8BM';
+    const cabangToko = storeInfo?.cabang ? ` - CABANG ${storeInfo.cabang}` : ' - CABANG BEKASI';
 
     const wb = new ExcelJS.Workbook();
-    wb.creator = 'Bot Laporan OMI Titan Eksekutif Mart';
+    wb.creator = `Bot Laporan ${namaToko}`;
     wb.created = new Date();
 
     // ========================================================
@@ -203,7 +208,7 @@ export async function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_P
     // 2. Subtitle Banner (Soft Dark Blue)
     ws.mergeCells('A2:L2');
     const subCell = ws.getCell('A2');
-    subCell.value = 'OMI TITAN EKSEKUTIF MART (KODE: O8BM) - CABANG BEKASI';
+    subCell.value = `${namaToko} (KODE: ${kodeToko})${cabangToko}`;
     subCell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFD9E1F2' } };
     subCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2F5597' } };
     subCell.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -212,7 +217,7 @@ export async function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_P
     // 3. Metadata
     ws.mergeCells('A3:L3');
     const metaCell = ws.getCell('A3');
-    metaCell.value = `Periode File: ${fileName} | Dibuat: ${new Date().toLocaleDateString('id-ID')} ${new Date().toLocaleTimeString('id-ID')} | Ringkasan: ${totalKritis} SKU Butuh Restock (${totalKosong} Habis, ${totalSangatKritis} Sangat Kritis, ${totalMenipis} Menipis)`;
+    metaCell.value = `Periode File: ${fileName} | Batas Stok: <= ${maxStockThreshold} pcs | Dibuat: ${new Date().toLocaleDateString('id-ID')} ${new Date().toLocaleTimeString('id-ID')} | Ringkasan: ${totalKritis} SKU Butuh Restock (${totalKosong} Habis, ${totalSangatKritis} Sangat Kritis, ${totalMenipis} Menipis)`;
     metaCell.font = { name: 'Arial', size: 9, italic: true, color: { argb: 'FF595959' } };
     metaCell.alignment = { horizontal: 'center', vertical: 'middle' };
     ws.getRow(3).height = 18;
@@ -360,7 +365,7 @@ export async function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_P
 
     ws2.mergeCells('A2:C2');
     const s2Sub = ws2.getCell('A2');
-    s2Sub.value = 'OMI TITAN EKSEKUTIF MART (O8BM)';
+    s2Sub.value = `${namaToko} (${kodeToko})`;
     s2Sub.font = { name: 'Arial', size: 10, italic: true, color: { argb: 'FFD9E1F2' } };
     s2Sub.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2F5597' } };
     s2Sub.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -377,10 +382,10 @@ export async function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_P
 
     const kpis = [
         ['Total Produk Pareto Dianalisa', totalItem, 'Seluruh produk pareto aktif di sistem POS', 'FFFFFFFF'],
-        ['Total Produk Membutuhkan Restock', totalKritis, 'Produk dengan sisa stok fisik <= 10 pcs', 'FFF2F2F2'],
+        ['Total Produk Membutuhkan Restock', totalKritis, `Produk dengan sisa stok fisik <= ${maxStockThreshold} pcs`, 'FFF2F2F2'],
         ['Stok Habis / Kosong (0 atau minus)', totalKosong, 'Prioritas 1: Segera buatkan PO/PB ke suplier hari ini', 'FFFCE4D6'],
         ['Stok Sangat Kritis (1 s/d 5 pcs)', totalSangatKritis, 'Prioritas 2: Berpotensi habis dalam 1-2 hari ke depan', 'FFFFF2CC'],
-        ['Stok Menipis (6 s/d 10 pcs)', totalMenipis, 'Prioritas 3: Persiapan jadwal pemesanan mingguan', 'FFFFFFFF']
+        [`Stok Menipis (6 s/d ${maxStockThreshold} pcs)`, totalMenipis, 'Prioritas 3: Persiapan jadwal pemesanan mingguan', 'FFFFFFFF']
     ];
 
     kpis.forEach((kpi, i) => {
@@ -408,16 +413,22 @@ export async function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_P
 /**
  * Generate ringkasan teks untuk balasan WhatsApp
  */
-export function getPbSummaryText(analysisResult, limit = 10) {
-    const { lowStockItems, totalKritis, totalKosong, totalSangatKritis, fileName } = analysisResult;
+export function getPbSummaryText(analysisResult, limit = 10, storeInfo = null) {
+    const { lowStockItems, totalKritis, totalKosong, totalSangatKritis, totalMenipis, maxStockThreshold = 10, fileName } = analysisResult;
+    const namaToko = storeInfo?.nama_toko || storeInfo?.nama || 'OMI TITAN EKSEKUTIF MART';
+    const kodeToko = storeInfo?.kode_toko || storeInfo?.kode || 'O8BM';
 
     let text = `📦 *ANALISA STOK PARETO & REKOMENDASI PB*\n`;
-    text += `OMI TITAN EKSEKUTIF MART (O8BM)\n`;
+    text += `${namaToko} (${kodeToko})\n`;
     text += `----------------------------------------\n`;
     text += `📁 Sumber: *${fileName}*\n`;
-    text += `🔴 Stok Habis (0)       : *${totalKosong} Item* (Prioritas 1)\n`;
+    text += `🎯 Ambang Batas Stok  : *<= ${maxStockThreshold} pcs*\n`;
+    text += `🔴 Stok Habis (0)      : *${totalKosong} Item* (Prioritas 1)\n`;
     text += `🟠 Sangat Kritis (1-5) : *${totalSangatKritis} Item* (Prioritas 2)\n`;
-    text += `🟡 Total Perlu Restock : *${totalKritis} Item*\n\n`;
+    if (maxStockThreshold > 5) {
+        text += `🟡 Menipis (6-${maxStockThreshold})     : *${totalMenipis} Item* (Prioritas 3)\n`;
+    }
+    text += `📊 *Total Perlu Restock: ${totalKritis} Item*\n\n`;
 
     text += `🚨 *TOP ${Math.min(limit, lowStockItems.length)} ITEM PALING URGENT RESTOCK:*\n`;
     lowStockItems.slice(0, limit).forEach((item, idx) => {
