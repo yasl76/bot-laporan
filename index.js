@@ -42,9 +42,19 @@ async function startBot() {
         }
 
         if (connection === 'close') {
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('🔄 Koneksi terputus, menyambung ulang...', shouldReconnect);
-            if (shouldReconnect) {
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+            console.log(`🔄 Koneksi terputus (Kode: ${statusCode || 'unknown'}), menyambung ulang...`, !isLoggedOut);
+
+            if (isLoggedOut) {
+                console.log('⚠️ Sesi WhatsApp telah logout atau tidak valid. Mereset sesi_bot agar QR code baru dapat dibuat...');
+                try {
+                    fs.rmSync('sesi_bot', { recursive: true, force: true });
+                } catch (e) {
+                    console.error('Error saat mereset sesi:', e);
+                }
+                setTimeout(startBot, 3000);
+            } else {
                 setTimeout(startBot, 5000);
             }
         } else if (connection === 'open') {
