@@ -68,11 +68,7 @@ async function startBot() {
         const m = messages[0];
         if (!m || !m.message) return;
 
-        // Cegah bot memproses pesan yang dikirim oleh nomor bot sendiri
-        if (m.key.fromMe) return;
-
         const sender = m.key.remoteJid;
-        // Dapatkan nomor pengirim asli (berlaku untuk personal chat maupun grup)
         const senderNumber = m.key.participant || sender;
 
         const text = m.message.conversation ||
@@ -82,6 +78,16 @@ async function startBot() {
 
         const cleanText = text.trim();
         const lowerText = cleanText.toLowerCase();
+
+        // Izinkan pesan dari diri sendiri (Message Yourself) HANYA jika berupa perintah bot eksplisit
+        const isBotCommandKeyword = lowerText.startsWith('!') || ['menu', 'lapor', 'rekap', 'pb'].includes(lowerText);
+        const botUserNumber = sock.user?.id ? normalizeNumber(sock.user.id) : '';
+        const isSelfChat = m.key.fromMe && (normalizeNumber(sender) === botUserNumber || sender.endsWith('@lid'));
+
+        // Jika pesan dari bot sendiri dan bukan perintah di self-chat, abaikan agar tidak looping
+        if (m.key.fromMe && !(isSelfChat && isBotCommandKeyword)) {
+            return;
+        }
 
         // ============================================================
         // 1. PENANGANAN UPLOAD DOKUMEN EXCEL PARETO

@@ -1,11 +1,16 @@
 {
   "admin": "6285123338591",
+  "admin_lid": "168779396993221",
   "users": [
     {
       "number": "6285123338591",
       "name": "Admin Utama",
       "role": "admin"
+    },
+    {
+      "number": "168779396993221",
+      "name": "Admin HP (LID)",
+      "role": "admin"
     }
   ]
 }
-

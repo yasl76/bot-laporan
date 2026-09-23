@@ -38,14 +38,15 @@ export function saveWhitelist(data) {
 export function isAllowed(jid) {
     const num = normalizeNumber(jid);
     const data = loadWhitelist();
-    if (num === data.admin) return true;
+    if (num === data.admin || (data.admin_lid && num === data.admin_lid)) return true;
     return data.users.some(u => normalizeNumber(u.number) === num);
 }
 
 export function isAdmin(jid) {
     const num = normalizeNumber(jid);
     const data = loadWhitelist();
-    return num === data.admin;
+    if (num === data.admin || (data.admin_lid && num === data.admin_lid)) return true;
+    return data.users.some(u => normalizeNumber(u.number) === num && u.role === 'admin');
 }
 
 export function addNumber(number, name = 'Karyawan Toko') {
