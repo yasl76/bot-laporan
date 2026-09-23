@@ -368,10 +368,15 @@ Total NBH:
         // 8. OLAH DATA LAPORAN BARU (!kirimlaporan)
         // ============================================================
         if (cleanText.includes('!kirimlaporan')) {
+            function escapeRegex(str) {
+                return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            }
+
             const extractValue = (key) => {
-                const regex = new RegExp(`(^|\\n)\\s*\\b${key}\\b\\s*:\\s*([^\\n]*)`, 'i');
+                const escaped = escapeRegex(key);
+                const regex = new RegExp(`(^|\\n)\\s*${escaped}\\s*:\\s*([^\\n]*)`, 'i');
                 const match = cleanText.match(regex);
-                return match && match[2] ? match[2].trim() : '';
+                return match && match[2] ? match[2].trim().replace(/%/g, '').trim() : '';
             };
 
             const spd = extractValue('SPD');
@@ -380,13 +385,13 @@ Total NBH:
             const std = extractValue('STD');
             const apc = extractValue('APC');
             const mgrp = extractValue('MGRP');
-            const mg = extractValue('MG%');
+            const mg = extractValue('MG%') || extractValue('MG');
             const lpp = extractValue('LPP');
             const avgSpd = extractValue('Avg SPD');
             const avgStd = extractValue('Avg STD');
             const avgApc = extractValue('Avg APC');
             const avgMgrp = extractValue('Avg MGRP');
-            const avgMg = extractValue('Avg MG%');
+            const avgMg = extractValue('Avg MG%') || extractValue('Avg MG');
             const yccg = extractValue('YCCG');
             const sosisOri = extractValue('Sosis Ori');
             const sosisKeju = extractValue('Sosis Keju');
