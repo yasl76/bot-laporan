@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Sesi WhatsApp (SANGAT PENTING - Berisi Kunci Kredensial Pribadi)
+sesi_bot/
+
+# Log & Environment
+*.log
+.env
+
+# Data Rekap Lokal Toko (Mencegah kebocoran data penjualan)
+rekap_data.json
+
+# System Files
+.DS_Store
+Thumbs.db
