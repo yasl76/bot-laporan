@@ -1,0 +1,10 @@
+{
+  "admin": "6285123338591",
+  "users": [
+    {
+      "number": "6285123338591",
+      "name": "Admin Utama",
+      "role": "admin"
+    }
+  ]
+}

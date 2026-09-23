@@ -11,6 +11,12 @@ sesi_bot/
 # Data Rekap Lokal Toko (Mencegah kebocoran data penjualan)
 rekap_data.json
 
+# File Hasil Generate Otomatis (Excel Laporan & Rekap)
+Laporan_PB_*.xlsx
+Rekap_Bulanan_*.xlsx
+test_*.xlsx
+*.temp.xlsx
+
 # System Files
 .DS_Store
 Thumbs.db
