@@ -92,3 +92,4 @@ export function listNumbers() {
     text += `_Gunakan !tambahnomor [nomor] [nama] atau !hapusnomor [nomor] untuk mengelola._`;
     return text;
 }
+
