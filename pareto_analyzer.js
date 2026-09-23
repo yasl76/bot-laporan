@@ -20,7 +20,6 @@ export function getLatestParetoFile(baseDir = '.') {
                 return { name: f, fullPath, mtime: fs.statSync(fullPath).mtime };
             })
             .sort((a, b) => {
-                // Prioritaskan file yang mengandung kata 'pareto'
                 const aPareto = a.name.toLowerCase().includes('pareto') ? 1 : 0;
                 const bPareto = b.name.toLowerCase().includes('pareto') ? 1 : 0;
                 if (aPareto !== bPareto) return bPareto - aPareto;
@@ -51,7 +50,7 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
         throw new Error('File Excel tidak memuat data yang cukup.');
     }
 
-    // Dynamic Header Detection: Memindai 30 baris awal untuk menemukan kolom kunci
+    // Dynamic Header Detection
     let headerRowIdx = -1;
     let colMap = {
         no: -1,
@@ -81,7 +80,6 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
             if (str.includes('hrg jual') || str.includes('harga')) colMap.hrgJual = c;
         });
 
-        // Jika menemukan minimal 3 kata kunci utama (misal PLU, Nama Barang, Qty Stock)
         if (foundKeywords >= 3) {
             headerRowIdx = r;
             break;
@@ -105,7 +103,6 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
         const plu = String(row[colMap.plu] || '').trim();
         const nama = String(row[colMap.nama] || '').trim();
 
-        // Lewati baris kosong atau baris total
         if (!plu || !nama || nama.toLowerCase().includes('total') || nama.toLowerCase().includes('grand')) {
             continue;
         }
@@ -117,7 +114,6 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
         const rawStock = String(row[colMap.qtyStock] !== undefined ? row[colMap.qtyStock] : '0').replace(/[^0-9.-]/g, '');
         const qtyStock = parseFloat(rawStock) || 0;
 
-        // Hitung estimasi rekomendasi order PB
         let rekomendasiOrder = 0;
         if (pkm > qtyStock) {
             rekomendasiOrder = Math.ceil(pkm - qtyStock);
@@ -126,12 +122,16 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
         }
 
         let statusKritis = 'AMAN';
+        let prioritasLevel = 3;
         if (qtyStock <= 0) {
             statusKritis = '🔴 KOSONG / HABIS';
+            prioritasLevel = 1;
         } else if (qtyStock <= 5) {
-            statusKritis = '🟠 SANGAT KRITIS (<= 5)';
+            statusKritis = '🟠 SANGAT KRITIS (1-5)';
+            prioritasLevel = 2;
         } else if (qtyStock <= maxStockThreshold) {
-            statusKritis = '🟡 MENIPIS (<= 10)';
+            statusKritis = '🟡 MENIPIS (6-10)';
+            prioritasLevel = 3;
         }
 
         const item = {
@@ -143,7 +143,8 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
             ft,
             qtyStock,
             rekomendasiOrder,
-            statusKritis
+            statusKritis,
+            prioritasLevel
         };
 
         allItems.push(item);
@@ -152,84 +153,146 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
         }
     }
 
-    // Urutkan barang kritis: stok 0 teratas, lalu berdasarkan ranking pareto
+    // Urutkan cerdas: Prioritas 1 (Habis) teratas diurutkan berdasarkan Ranking Pareto terlaris
     lowStockItems.sort((a, b) => {
-        if (a.qtyStock === b.qtyStock) return a.no - b.no;
-        return a.qtyStock - b.qtyStock;
+        if (a.prioritasLevel !== b.prioritasLevel) return a.prioritasLevel - b.prioritasLevel;
+        return a.no - b.no;
     });
+
+    const totalKosong = lowStockItems.filter(i => i.qtyStock <= 0).length;
+    const totalSangatKritis = lowStockItems.filter(i => i.qtyStock > 0 && i.qtyStock <= 5).length;
+    const totalMenipis = lowStockItems.filter(i => i.qtyStock > 5 && i.qtyStock <= maxStockThreshold).length;
 
     return {
         totalItem: allItems.length,
         totalKritis: lowStockItems.length,
-        totalKosong: lowStockItems.filter(i => i.qtyStock <= 0).length,
+        totalKosong,
+        totalSangatKritis,
+        totalMenipis,
         lowStockItems,
         fileName: path.basename(filePath)
     };
 }
 
 /**
- * Generate File Excel Rekomendasi PB (Permintaan Barang)
+ * Generate File Excel Rekomendasi PB yang Sangat Rapi & Profesional
  */
 export function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_Pareto.xlsx') {
-    const { lowStockItems, totalItem, totalKritis, totalKosong, fileName } = analysisResult;
+    const { lowStockItems, totalItem, totalKritis, totalKosong, totalSangatKritis, totalMenipis, fileName } = analysisResult;
 
-    const dataExcel = [];
+    const wb = xlsx.utils.book_new();
 
-    // Header Laporan
-    dataExcel.push(['REKOMENDASI PERMINTAAN BARANG (PB) - ANALISA STOK PARETO']);
-    dataExcel.push(['NAMA TOKO: OMI TITAN EKSEKUTIF MART (O8BM)']);
-    dataExcel.push([`File Sumber: ${fileName} | Tanggal Generate: ${new Date().toLocaleDateString('id-ID')} ${new Date().toLocaleTimeString('id-ID')}`]);
-    dataExcel.push([`Total Item Pareto: ${totalItem} | Stok Kritis (<= 10): ${totalKritis} Item | Stok Kosong (0): ${totalKosong} Item`]);
-    dataExcel.push([]); // Baris kosong
+    // ========================================================
+    // SHEET 1: DAFTAR REKOMENDASI ORDER PB (TABEL UTAMA)
+    // ========================================================
+    const rowsUtama = [];
 
-    // Header Kolom Tabel
-    dataExcel.push([
+    // Header Judul Dokumen
+    rowsUtama.push(['DAFTAR REKOMENDASI PERMINTAAN BARANG (PB) - ANALISA STOK PARETO']);
+    rowsUtama.push(['OMI TITAN EKSEKUTIF MART (KODE: O8BM) - CABANG BEKASI']);
+    rowsUtama.push([`File Sumber: ${fileName} | Tanggal Dibuat: ${new Date().toLocaleDateString('id-ID')} ${new Date().toLocaleTimeString('id-ID')}`]);
+    rowsUtama.push([`Ringkasan: ${totalItem} Total SKU | ${totalKritis} Butuh Restock (${totalKosong} Habis, ${totalSangatKritis} Sangat Kritis, ${totalMenipis} Menipis)`]);
+    rowsUtama.push([]); // Baris kosong pemisah
+
+    // Baris Header Kolom Tabel
+    rowsUtama.push([
         'No.',
-        'Ranking Pareto',
+        'Prioritas',
+        'Ranking',
         'Kode PLU',
         'Nama Barang',
-        'Sisa Stok Toko',
-        'PKM',
-        'Fraction (FT)',
-        'Qty Penjualan',
-        'Rekomendasi Order (Pcs)',
+        'Sisa Stok',
+        'Target (PKM)',
+        'Isi/Dus (FT)',
+        'Penjualan (Qty)',
+        'Order (Pcs)',
+        'Estimasi Order (Dus/Karton)',
         'Status Kritis'
     ]);
 
     // Data Baris
     lowStockItems.forEach((item, index) => {
-        dataExcel.push([
+        let labelPrioritas = '3. Menipis';
+        if (item.prioritasLevel === 1) labelPrioritas = '1. URGENT (HABIS)';
+        else if (item.prioritasLevel === 2) labelPrioritas = '2. SEGERA (1-5)';
+
+        // Hitung estimasi order dus jika FT tersedia
+        let orderDus = `${item.rekomendasiOrder} Pcs`;
+        if (item.ft > 1 && item.rekomendasiOrder > 0) {
+            const jumlahDus = Math.ceil(item.rekomendasiOrder / item.ft);
+            orderDus = `${jumlahDus} Dus (${item.rekomendasiOrder} Pcs)`;
+        }
+
+        rowsUtama.push([
             index + 1,
+            labelPrioritas,
             item.no,
-            item.plu,
+            String(item.plu), // Pastikan PLU tersimpan sebagai teks agar angka 0 di depan tidak hilang
             item.nama,
             item.qtyStock,
-            item.pkm,
-            item.ft,
-            item.qtyJual,
+            item.pkm || 0,
+            item.ft > 0 ? item.ft : '-',
+            item.qtyJual || 0,
             item.rekomendasiOrder,
+            orderDus,
             item.statusKritis
         ]);
     });
 
-    const wb = xlsx.utils.book_new();
-    const ws = xlsx.utils.aoa_to_sheet(dataExcel);
+    const wsUtama = xlsx.utils.aoa_to_sheet(rowsUtama);
 
-    // Atur Lebar Kolom agar rapi saat dibuka di Microsoft Excel
-    ws['!cols'] = [
+    // Pengaturan Lebar Kolom Presisi agar tidak terpotong (###)
+    wsUtama['!cols'] = [
         { wch: 6 },  // No.
-        { wch: 15 }, // Ranking
-        { wch: 15 }, // PLU
-        { wch: 35 }, // Nama Barang
-        { wch: 15 }, // Sisa Stok
-        { wch: 10 }, // PKM
-        { wch: 12 }, // FT
-        { wch: 15 }, // Qty Jual
-        { wch: 22 }, // Rekomendasi Order
-        { wch: 24 }  // Status Kritis
+        { wch: 18 }, // Prioritas
+        { wch: 10 }, // Ranking
+        { wch: 14 }, // Kode PLU
+        { wch: 38 }, // Nama Barang
+        { wch: 12 }, // Sisa Stok
+        { wch: 13 }, // Target (PKM)
+        { wch: 14 }, // Isi/Dus (FT)
+        { wch: 16 }, // Penjualan (Qty)
+        { wch: 14 }, // Order (Pcs)
+        { wch: 25 }, // Estimasi Order (Dus)
+        { wch: 25 }  // Status Kritis
     ];
 
-    xlsx.utils.book_append_sheet(wb, ws, 'Rekomendasi PB Pareto');
+    // Aktifkan Fitur AutoFilter Excel pada baris header (Baris 6)
+    wsUtama['!autofilter'] = { ref: `A6:L${rowsUtama.length}` };
+
+    xlsx.utils.book_append_sheet(wb, wsUtama, 'Daftar Order PB Pareto');
+
+    // ========================================================
+    // SHEET 2: RINGKASAN EKSEKUTIF / DASHBOARD STOK
+    // ========================================================
+    let totalPcsOrder = 0;
+    lowStockItems.forEach(i => { totalPcsOrder += (i.rekomendasiOrder || 0); });
+
+    const rowsSummary = [
+        ['RINGKASAN EKSEKUTIF MONITORING STOK PARETO'],
+        ['OMI TITAN EKSEKUTIF MART (O8BM)'],
+        [`Tanggal Analisa: ${new Date().toLocaleDateString('id-ID')} ${new Date().toLocaleTimeString('id-ID')}`],
+        [],
+        ['PARAMETER MONITORING', 'JUMLAH (SKU)', 'KETERANGAN & TINDAKAN'],
+        ['Total Produk Pareto Dianalisa', totalItem, 'Seluruh produk pareto aktif di sistem POS'],
+        ['Total Produk Membutuhkan Restock', totalKritis, 'Produk dengan sisa stok fisik <= 10 pcs'],
+        ['Stok Habis / Kosong (0 atau minus)', totalKosong, 'Prioritas 1: Segera buatkan PO/PB ke suplier hari ini'],
+        ['Stok Sangat Kritis (1 s/d 5 pcs)', totalSangatKritis, 'Prioritas 2: Berpotensi habis dalam 1-2 hari ke depan'],
+        ['Stok Menipis (6 s/d 10 pcs)', totalMenipis, 'Prioritas 3: Persiapan jadwal pemesanan mingguan'],
+        [],
+        ['ESTIMASI KUANTITAS PEMESANAN', 'JUMLAH (PCS)', 'KETERANGAN'],
+        ['Total Estimasi Order PB', totalPcsOrder, 'Akumulasi kuantitas barang yang direkomendasikan']
+    ];
+
+    const wsSummary = xlsx.utils.aoa_to_sheet(rowsSummary);
+    wsSummary['!cols'] = [
+        { wch: 38 },
+        { wch: 16 },
+        { wch: 45 }
+    ];
+
+    xlsx.utils.book_append_sheet(wb, wsSummary, 'Ringkasan Eksekutif');
+
     xlsx.writeFile(wb, outputPath);
     return outputPath;
 }
@@ -238,21 +301,29 @@ export function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_Pareto.
  * Generate ringkasan teks untuk balasan WhatsApp
  */
 export function getPbSummaryText(analysisResult, limit = 10) {
-    const { lowStockItems, totalKritis, totalKosong, fileName } = analysisResult;
+    const { lowStockItems, totalKritis, totalKosong, totalSangatKritis, fileName } = analysisResult;
 
     let text = `📦 *ANALISA STOK PARETO & REKOMENDASI PB*\n`;
+    text += `OMI TITAN EKSEKUTIF MART (O8BM)\n`;
     text += `----------------------------------------\n`;
     text += `📁 Sumber: *${fileName}*\n`;
-    text += `🔴 Stok Kosong (0) : *${totalKosong} Item*\n`;
-    text += `🟡 Stok Menipis (<=10) : *${totalKritis} Item*\n\n`;
+    text += `🔴 Stok Habis (0)       : *${totalKosong} Item* (Prioritas 1)\n`;
+    text += `🟠 Sangat Kritis (1-5) : *${totalSangatKritis} Item* (Prioritas 2)\n`;
+    text += `🟡 Total Perlu Restock : *${totalKritis} Item*\n\n`;
 
-    text += `🚨 *TOP ${Math.min(limit, lowStockItems.length)} ITEM PALING KRITIS RESTOCK:*\n`;
+    text += `🚨 *TOP ${Math.min(limit, lowStockItems.length)} ITEM PALING URGENT RESTOCK:*\n`;
     lowStockItems.slice(0, limit).forEach((item, idx) => {
-        text += `${idx + 1}. *${item.nama}* (PLU: ${item.plu})\n`;
-        text += `   ↳ Sisa Stok: *${item.qtyStock}* | PKM: ${item.pkm} | Rekomendasi PB: *${item.rekomendasiOrder} pcs*\n`;
+        let orderSatuan = `${item.rekomendasiOrder} pcs`;
+        if (item.ft > 1) {
+            const dus = Math.ceil(item.rekomendasiOrder / item.ft);
+            orderSatuan = `${dus} Dus (${item.rekomendasiOrder} pcs)`;
+        }
+
+        text += `${idx + 1}. *${item.nama}* (Rank: #${item.no} | PLU: ${item.plu})\n`;
+        text += `   ↳ Sisa Stok: *${item.qtyStock}* | PKM: ${item.pkm} | Rekomendasi: *${orderSatuan}*\n`;
     });
 
     text += `\n----------------------------------------\n`;
-    text += `💡 _Ketik *!pb excel* untuk mengunduh laporan Excel lengkap (${totalKritis} item) siap kirim ke supplier._`;
+    text += `💡 _Ketik *!pb excel* untuk mengunduh laporan Excel lengkap (tabel terurut dengan fitur filter & estimasi dus)._`;
     return text;
 }
