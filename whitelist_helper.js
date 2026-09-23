@@ -3,18 +3,17 @@ import fs from 'fs';
 const WHITELIST_FILE = 'whitelist.json';
 export const DEFAULT_SUPER_ADMINS = [
     '6285852559058',
-    '215633832722432',
     '6285123338591',
     '168779396993221'
 ];
 
 /**
  * Normalisasi nomor WhatsApp:
- * Mengubah format lokal 08xxx menjadi 628xxx, membuang tanda baca, akhiran @s.whatsapp.net, @lid, atau :device
+ * Mengubah format lokal 08xxx menjadi 628xxx, membuang tanda baca, tanda kurung siku, akhiran @s.whatsapp.net, @lid, atau :device
  */
 export function normalizeNumber(num) {
     if (!num) return '';
-    let clean = num.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+    let clean = String(num).split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
     if (clean.startsWith('08')) {
         clean = '62' + clean.slice(1);
     }
@@ -61,7 +60,7 @@ export function loadWhitelist() {
 
         // Pastikan Super Admin terdaftar di users dengan role super_admin
         for (const sa of data.super_admins) {
-            const exists = data.users.find(u => normalizeNumber(u.number) === sa);
+            const exists = data.users.find(u => normalizeNumber(u.number) === sa || (u.lid && normalizeNumber(u.lid) === sa));
             if (!exists) {
                 data.users.push({ number: sa, name: 'Super Admin', role: 'super_admin' });
             } else {
@@ -108,11 +107,16 @@ export function isSuperAdmin(jid) {
     if (num === normalizeNumber(data.admin) || (data.admin_lid && num === normalizeNumber(data.admin_lid))) {
         return true;
     }
-    return data.users.some(u => normalizeNumber(u.number) === num && u.role === 'super_admin');
+    return data.users.some(u => {
+        const uNum = normalizeNumber(u.number);
+        const uLid = u.lid ? normalizeNumber(u.lid) : '';
+        return (uNum === num || uLid === num) && u.role === 'super_admin';
+    });
 }
 
 /**
  * Memeriksa apakah nomor terdaftar di bot (Super Admin atau Admin Biasa)
+ * Mendukung pencocokan nomor HP biasa maupun LID WhatsApp multi-device
  */
 export function isAllowed(jid) {
     const num = normalizeNumber(jid);
@@ -120,7 +124,11 @@ export function isAllowed(jid) {
     if (isSuperAdmin(num)) return true;
 
     const data = loadWhitelist();
-    return data.users.some(u => normalizeNumber(u.number) === num);
+    return data.users.some(u => {
+        const uNum = normalizeNumber(u.number);
+        const uLid = u.lid ? normalizeNumber(u.lid) : '';
+        return uNum === num || (uLid && uLid === num);
+    });
 }
 
 /**
@@ -132,29 +140,57 @@ export function isAdmin(jid) {
 
 /**
  * Tambah Admin Biasa (Karyawan Toko / Kasir / Kepala Toko)
+ * Mendukung pencatatan nomor HP dan LID WhatsApp sekaligus
  */
-export function addNumber(number, name = 'Karyawan Toko') {
+export function addNumber(number, name = 'Karyawan Toko', lid = '') {
     const norm = normalizeNumber(number);
+    const normLid = lid ? normalizeNumber(lid) : '';
+
     if (!norm || norm.length < 9) {
         return { success: false, message: '⚠️ Format nomor tidak valid. Masukkan nomor HP Indonesia yang benar (cth: 08123456789).' };
     }
 
     const data = loadWhitelist();
-    const existing = data.users.find(u => normalizeNumber(u.number) === norm);
+    const existing = data.users.find(u => {
+        const uNum = normalizeNumber(u.number);
+        const uLid = u.lid ? normalizeNumber(u.lid) : '';
+        return uNum === norm || (normLid && uLid && uLid === normLid);
+    });
+
     if (existing) {
-        return { success: false, message: `ℹ️ Nomor *${norm}* (${existing.name}) sudah terdaftar sebagai *${existing.role || 'admin_biasa'}*.` };
+        // Jika sudah ada tapi belum ada LID, dan ada LID baru, perbarui LID-nya
+        if (normLid && !existing.lid) {
+            existing.lid = normLid;
+            saveWhitelist(data);
+            return {
+                success: true,
+                message: `✅ Berhasil memperbarui data *${norm}* (${existing.name}) dengan LID WhatsApp: *${normLid}*.`
+            };
+        }
+        return { success: false, message: `ℹ️ Nomor *${norm}* (${existing.name}) sudah terdaftar sebelumnya sebagai *${existing.role || 'admin_biasa'}*.` };
     }
 
-    data.users.push({ number: norm, name, role: 'admin_biasa' });
+    const newUser = { number: norm, name, role: 'admin_biasa' };
+    if (normLid) {
+        newUser.lid = normLid;
+    }
+
+    data.users.push(newUser);
     saveWhitelist(data);
+
+    let message = `✅ Berhasil menambahkan Admin Biasa!\n• Nomor: *${norm}*\n• Nama  : *${name}*\n• Peran : *Admin Biasa (Operasional)*`;
+    if (normLid) {
+        message += `\n• LID WhatsApp: *${normLid}*`;
+    }
+
     return {
         success: true,
-        message: `✅ Berhasil menambahkan Admin Biasa!\n• Nomor: *${norm}*\n• Nama  : *${name}*\n• Peran : *Admin Biasa (Operasional)*`
+        message
     };
 }
 
 /**
- * Hapus nomor dari whitelist
+ * Hapus nomor dari whitelist (bisa berdasarkan nomor HP ataupun LID)
  */
 export function removeNumber(number) {
     const norm = normalizeNumber(number);
@@ -165,7 +201,11 @@ export function removeNumber(number) {
     }
 
     const before = data.users.length;
-    data.users = data.users.filter(u => normalizeNumber(u.number) !== norm);
+    data.users = data.users.filter(u => {
+        const uNum = normalizeNumber(u.number);
+        const uLid = u.lid ? normalizeNumber(u.lid) : '';
+        return uNum !== norm && uLid !== norm;
+    });
 
     if (data.users.length === before) {
         return { success: false, message: `ℹ️ Nomor *${norm}* tidak ditemukan dalam daftar pengguna.` };
@@ -176,7 +216,7 @@ export function removeNumber(number) {
 }
 
 /**
- * Tampilkan daftar nomor terdaftar beserta perannya
+ * Tampilkan daftar nomor terdaftar beserta perannya dan LID (jika ada)
  */
 export function listNumbers() {
     const data = loadWhitelist();
@@ -195,7 +235,8 @@ export function listNumbers() {
         text += `_(Belum ada admin biasa terdaftar. Tambahkan dengan !tambahnomor [no] [nama])_\n`;
     } else {
         normalAdmins.forEach((u, i) => {
-            text += `${i + 1}. ${u.number} - ${u.name}\n`;
+            const lidInfo = u.lid ? ` (LID: ${u.lid})` : '';
+            text += `${i + 1}. ${u.number} - ${u.name}${lidInfo}\n`;
         });
     }
 

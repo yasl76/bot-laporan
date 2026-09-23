@@ -74,11 +74,31 @@ async function startBot() {
 
         const sender = m.key.remoteJid;
         const senderNumber = m.key.participant || sender;
-        const normSender = normalizeNumber(senderNumber);
-        const normRemote = normalizeNumber(sender);
+        const senderPn = m.key.senderPn || m.key.participantPn || '';
+        const senderLid = m.key.senderLid || m.key.participantLid || '';
 
-        const isSenderSuperAdmin = isSuperAdmin(normSender) || isSuperAdmin(normRemote);
-        const isSenderAllowed = isAllowed(normSender) || isAllowed(normRemote);
+        const candidates = [
+            normalizeNumber(senderNumber),
+            normalizeNumber(sender),
+            normalizeNumber(senderPn),
+            normalizeNumber(senderLid)
+        ].filter(Boolean);
+
+        const normSender = candidates[0] || normalizeNumber(senderNumber);
+        const isSenderSuperAdmin = candidates.some(c => isSuperAdmin(c));
+        const isSenderAllowed = candidates.some(c => isAllowed(c));
+
+        // Auto-link LID WhatsApp ke pengguna terdaftar jika belum tersimpan
+        if (sender.endsWith('@lid') && isSenderAllowed) {
+            const currentLid = normalizeNumber(sender);
+            const wl = loadWhitelist();
+            const matchedUser = wl.users.find(u => candidates.includes(normalizeNumber(u.number)));
+            if (matchedUser && !matchedUser.lid) {
+                matchedUser.lid = currentLid;
+                saveWhitelist(wl);
+                console.log(`🔗 Auto-link LID WhatsApp ${currentLid} ke ${matchedUser.name} (${matchedUser.number})`);
+            }
+        }
 
         const text = m.message.conversation ||
                      m.message.extendedTextMessage?.text ||
@@ -461,16 +481,40 @@ async function startBot() {
                 return;
             }
 
-            const parts = cleanText.split(/\s+/);
-            const targetNumber = parts[1];
-            const targetName = parts.slice(2).join(' ') || 'Karyawan Toko';
+            const cleanParams = cleanText.slice('!tambahnomor'.length).trim();
+            let targetNumber = '';
+            let targetName = 'Karyawan Toko';
+
+            // Mendukung baik format kurung siku [08xxx] [nama] maupun biasa 08xxx nama
+            const bracketMatch = cleanParams.match(/^\[([^\]]+)\]\s*\[([^\]]+)\]$/);
+            if (bracketMatch) {
+                targetNumber = bracketMatch[1].trim();
+                targetName = bracketMatch[2].trim();
+            } else {
+                const parts = cleanParams.split(/\s+/);
+                targetNumber = parts[0] ? parts[0].replace(/[\[\]]/g, '').trim() : '';
+                targetName = parts.slice(1).join(' ').replace(/[\[\]]/g, '').trim() || 'Karyawan Toko';
+            }
 
             if (!targetNumber) {
-                await sock.sendMessage(sender, { text: '⚠️ Format salah. Contoh:\n*!tambahnomor 08123456789 Budi*' });
+                await sock.sendMessage(sender, {
+                    text: '⚠️ Format salah. Contoh penggunaan:\n• *!tambahnomor 08123456789 Budi*\n• *!tambahnomor [08123456789] [Budi]*'
+                });
                 return;
             }
 
-            const res = addNumber(targetNumber, targetName);
+            // Lookup otomatis LID WhatsApp untuk nomor HP tersebut
+            let resolvedLid = '';
+            try {
+                const waLookup = await sock.onWhatsApp(targetNumber);
+                if (waLookup && waLookup.length > 0 && waLookup[0].lid) {
+                    resolvedLid = normalizeNumber(waLookup[0].lid);
+                }
+            } catch (e) {
+                console.log('Tidak dapat lookup LID onWhatsApp:', e.message);
+            }
+
+            const res = addNumber(targetNumber, targetName, resolvedLid);
             await sock.sendMessage(sender, { text: res.message });
             return;
         }
