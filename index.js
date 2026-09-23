@@ -116,7 +116,7 @@ async function startBot() {
                     const analysis = analyzePareto(savedPath);
                     const summaryText = getPbSummaryText(analysis);
                     const excelOutput = `Laporan_PB_Pareto_${Date.now()}.xlsx`;
-                    generatePbExcel(analysis, excelOutput);
+                    await generatePbExcel(analysis, excelOutput);
 
                     await sock.sendMessage(sender, { text: summaryText });
                     await sock.sendMessage(sender, {
@@ -274,7 +274,7 @@ Total NBH:
                 const options = { day: 'numeric', month: 'long', year: 'numeric' };
                 const todayClean = new Date().toLocaleDateString('id-ID', options).replace(/[\s]/g, '_');
                 const outPath = `Laporan_PB_Pareto_${Date.now()}.xlsx`;
-                generatePbExcel(analysis, outPath);
+                await generatePbExcel(analysis, outPath);
 
                 await sock.sendMessage(sender, {
                     document: fs.readFileSync(outPath),

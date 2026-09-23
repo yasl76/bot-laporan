@@ -1,4 +1,5 @@
 import xlsx from 'xlsx';
+import ExcelJS from 'exceljs';
 import fs from 'fs';
 import path from 'path';
 
@@ -86,7 +87,6 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
         }
     }
 
-    // Fallback jika header terpisah 2 baris (seperti contoh pareto july.xls baris 13-14)
     if (colMap.plu === -1 || colMap.qtyStock === -1) {
         colMap = { no: 0, plu: 2, nama: 3, qtyJual: 7, pkm: 24, ft: 26, qtyStock: 29, hrgJual: 14 };
         headerRowIdx = 13;
@@ -175,27 +175,52 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
 }
 
 /**
- * Generate File Excel Rekomendasi PB yang Sangat Rapi & Profesional
+ * Generate File Excel Rekomendasi PB dengan Tampilan Bewarna, Rapi, & Elegan
  */
-export function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_Pareto.xlsx') {
+export async function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_Pareto.xlsx') {
     const { lowStockItems, totalItem, totalKritis, totalKosong, totalSangatKritis, totalMenipis, fileName } = analysisResult;
 
-    const wb = xlsx.utils.book_new();
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Bot Laporan OMI Titan Eksekutif Mart';
+    wb.created = new Date();
 
     // ========================================================
-    // SHEET 1: DAFTAR REKOMENDASI ORDER PB (TABEL UTAMA)
+    // SHEET 1: DAFTAR REKOMENDASI ORDER PB
     // ========================================================
-    const rowsUtama = [];
+    const ws = wb.addWorksheet('Daftar Order PB Pareto', {
+        views: [{ state: 'frozen', ySplit: 5 }]
+    });
 
-    // Header Judul Dokumen
-    rowsUtama.push(['DAFTAR REKOMENDASI PERMINTAAN BARANG (PB) - ANALISA STOK PARETO']);
-    rowsUtama.push(['OMI TITAN EKSEKUTIF MART (KODE: O8BM) - CABANG BEKASI']);
-    rowsUtama.push([`File Sumber: ${fileName} | Tanggal Dibuat: ${new Date().toLocaleDateString('id-ID')} ${new Date().toLocaleTimeString('id-ID')}`]);
-    rowsUtama.push([`Ringkasan: ${totalItem} Total SKU | ${totalKritis} Butuh Restock (${totalKosong} Habis, ${totalSangatKritis} Sangat Kritis, ${totalMenipis} Menipis)`]);
-    rowsUtama.push([]); // Baris kosong pemisah
+    // 1. Title Banner (Navy Blue Elegan)
+    ws.mergeCells('A1:L1');
+    const titleCell = ws.getCell('A1');
+    titleCell.value = 'DAFTAR REKOMENDASI PERMINTAAN BARANG (PB) - ANALISA STOK PARETO';
+    titleCell.font = { name: 'Arial', size: 13, bold: true, color: { argb: 'FFFFFFFF' } };
+    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+    titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(1).height = 28;
 
-    // Baris Header Kolom Tabel
-    rowsUtama.push([
+    // 2. Subtitle Banner (Soft Dark Blue)
+    ws.mergeCells('A2:L2');
+    const subCell = ws.getCell('A2');
+    subCell.value = 'OMI TITAN EKSEKUTIF MART (KODE: O8BM) - CABANG BEKASI';
+    subCell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFD9E1F2' } };
+    subCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2F5597' } };
+    subCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(2).height = 20;
+
+    // 3. Metadata
+    ws.mergeCells('A3:L3');
+    const metaCell = ws.getCell('A3');
+    metaCell.value = `Periode File: ${fileName} | Dibuat: ${new Date().toLocaleDateString('id-ID')} ${new Date().toLocaleTimeString('id-ID')} | Ringkasan: ${totalKritis} SKU Butuh Restock (${totalKosong} Habis, ${totalSangatKritis} Sangat Kritis, ${totalMenipis} Menipis)`;
+    metaCell.font = { name: 'Arial', size: 9, italic: true, color: { argb: 'FF595959' } };
+    metaCell.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws.getRow(3).height = 18;
+
+    ws.getRow(4).height = 8; // Spasi pemisah
+
+    // 4. Baris Header Kolom Tabel (Bewarna Navy Blue dengan Teks Putih Tebal)
+    const headers = [
         'No.',
         'Prioritas',
         'Ranking',
@@ -206,28 +231,70 @@ export function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_Pareto.
         'Isi/Dus (FT)',
         'Penjualan (Qty)',
         'Order (Pcs)',
-        'Estimasi Order (Dus/Karton)',
+        'Estimasi Order (Dus)',
         'Status Kritis'
-    ]);
+    ];
 
-    // Data Baris
-    lowStockItems.forEach((item, index) => {
+    const headerRow = ws.getRow(5);
+    headerRow.values = headers;
+    headerRow.height = 26;
+
+    headerRow.eachCell((cell) => {
+        cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        cell.border = {
+            top: { style: 'medium', color: { argb: 'FF102A45' } },
+            bottom: { style: 'medium', color: { argb: 'FF102A45' } },
+            left: { style: 'thin', color: { argb: 'FFB4C6E7' } },
+            right: { style: 'thin', color: { argb: 'FFB4C6E7' } }
+        };
+    });
+
+    const thinBorder = {
+        top: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        bottom: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        left: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        right: { style: 'thin', color: { argb: 'FFD9D9D9' } }
+    };
+
+    // 5. Baris Data (Row Bewarna Sesuai Status Kritis)
+    lowStockItems.forEach((item, idx) => {
+        const rowNum = 6 + idx;
+        const row = ws.getRow(rowNum);
+
         let labelPrioritas = '3. Menipis';
-        if (item.prioritasLevel === 1) labelPrioritas = '1. URGENT (HABIS)';
-        else if (item.prioritasLevel === 2) labelPrioritas = '2. SEGERA (1-5)';
+        let statusText = '🟡 MENIPIS (6-10)';
+        // Default zebra striping bersih
+        let rowBgColor = (idx % 2 === 0) ? 'FFFFFFFF' : 'FFF9FAFB';
+        let fontColor = 'FF212529';
 
-        // Hitung estimasi order dus jika FT tersedia
+        // Highlight Merah Pastel untuk Stok Kosong / Habis (Prioritas 1)
+        if (item.qtyStock <= 0) {
+            labelPrioritas = '1. URGENT';
+            statusText = '🔴 KOSONG / HABIS';
+            rowBgColor = 'FFFCE4D6'; // Soft Peach/Red highlight
+            fontColor = 'FF9C0006';  // Dark Red text
+        }
+        // Highlight Kuning Pastel untuk Stok Sangat Kritis 1-5 (Prioritas 2)
+        else if (item.qtyStock <= 5) {
+            labelPrioritas = '2. SEGERA';
+            statusText = '🟠 KRITIS (1-5)';
+            rowBgColor = 'FFFFF2CC'; // Soft Amber highlight
+            fontColor = 'FF7F6000';  // Dark Amber text
+        }
+
         let orderDus = `${item.rekomendasiOrder} Pcs`;
         if (item.ft > 1 && item.rekomendasiOrder > 0) {
             const jumlahDus = Math.ceil(item.rekomendasiOrder / item.ft);
             orderDus = `${jumlahDus} Dus (${item.rekomendasiOrder} Pcs)`;
         }
 
-        rowsUtama.push([
-            index + 1,
+        row.values = [
+            idx + 1,
             labelPrioritas,
             item.no,
-            String(item.plu), // Pastikan PLU tersimpan sebagai teks agar angka 0 di depan tidak hilang
+            String(item.plu),
             item.nama,
             item.qtyStock,
             item.pkm || 0,
@@ -235,65 +302,106 @@ export function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_Pareto.
             item.qtyJual || 0,
             item.rekomendasiOrder,
             orderDus,
-            item.statusKritis
-        ]);
+            statusText
+        ];
+        row.height = 20;
+
+        row.eachCell((cell, colNumber) => {
+            cell.font = {
+                name: 'Arial',
+                size: 9.5,
+                color: { argb: fontColor },
+                bold: (colNumber === 2 || colNumber === 10 || item.qtyStock <= 0)
+            };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowBgColor } };
+            cell.border = thinBorder;
+
+            // Perataan kolom
+            if (colNumber === 1 || colNumber === 2 || colNumber === 3 || colNumber === 4 || colNumber === 8 || colNumber === 12) {
+                cell.alignment = { horizontal: 'center', vertical: 'middle' };
+            } else if (colNumber === 5) {
+                cell.alignment = { horizontal: 'left', vertical: 'middle' };
+            } else {
+                cell.alignment = { horizontal: 'right', vertical: 'middle' };
+            }
+        });
     });
 
-    const wsUtama = xlsx.utils.aoa_to_sheet(rowsUtama);
-
-    // Pengaturan Lebar Kolom Presisi agar tidak terpotong (###)
-    wsUtama['!cols'] = [
-        { wch: 6 },  // No.
-        { wch: 18 }, // Prioritas
-        { wch: 10 }, // Ranking
-        { wch: 14 }, // Kode PLU
-        { wch: 38 }, // Nama Barang
-        { wch: 12 }, // Sisa Stok
-        { wch: 13 }, // Target (PKM)
-        { wch: 14 }, // Isi/Dus (FT)
-        { wch: 16 }, // Penjualan (Qty)
-        { wch: 14 }, // Order (Pcs)
-        { wch: 25 }, // Estimasi Order (Dus)
-        { wch: 25 }  // Status Kritis
+    // Lebar Kolom Proporsional
+    ws.columns = [
+        { width: 6 },  // No
+        { width: 16 }, // Prioritas
+        { width: 10 }, // Ranking
+        { width: 14 }, // PLU
+        { width: 38 }, // Nama Barang
+        { width: 13 }, // Sisa Stok
+        { width: 14 }, // Target (PKM)
+        { width: 13 }, // Isi Dus (FT)
+        { width: 16 }, // Qty Jual
+        { width: 15 }, // Order Pcs
+        { width: 24 }, // Order Dus
+        { width: 22 }  // Status Kritis
     ];
 
-    // Aktifkan Fitur AutoFilter Excel pada baris header (Baris 6)
-    wsUtama['!autofilter'] = { ref: `A6:L${rowsUtama.length}` };
-
-    xlsx.utils.book_append_sheet(wb, wsUtama, 'Daftar Order PB Pareto');
+    // Aktifkan Filter Otomatis Excel
+    ws.autoFilter = `A5:L${5 + lowStockItems.length}`;
 
     // ========================================================
-    // SHEET 2: RINGKASAN EKSEKUTIF / DASHBOARD STOK
+    // SHEET 2: RINGKASAN EKSEKUTIF (DASHBOARD)
     // ========================================================
-    let totalPcsOrder = 0;
-    lowStockItems.forEach(i => { totalPcsOrder += (i.rekomendasiOrder || 0); });
+    const ws2 = wb.addWorksheet('Ringkasan Eksekutif');
+    ws2.mergeCells('A1:C1');
+    const s2Title = ws2.getCell('A1');
+    s2Title.value = 'RINGKASAN EKSEKUTIF MONITORING STOK PARETO';
+    s2Title.font = { name: 'Arial', size: 12, bold: true, color: { argb: 'FFFFFFFF' } };
+    s2Title.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+    s2Title.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws2.getRow(1).height = 26;
 
-    const rowsSummary = [
-        ['RINGKASAN EKSEKUTIF MONITORING STOK PARETO'],
-        ['OMI TITAN EKSEKUTIF MART (O8BM)'],
-        [`Tanggal Analisa: ${new Date().toLocaleDateString('id-ID')} ${new Date().toLocaleTimeString('id-ID')}`],
-        [],
-        ['PARAMETER MONITORING', 'JUMLAH (SKU)', 'KETERANGAN & TINDAKAN'],
-        ['Total Produk Pareto Dianalisa', totalItem, 'Seluruh produk pareto aktif di sistem POS'],
-        ['Total Produk Membutuhkan Restock', totalKritis, 'Produk dengan sisa stok fisik <= 10 pcs'],
-        ['Stok Habis / Kosong (0 atau minus)', totalKosong, 'Prioritas 1: Segera buatkan PO/PB ke suplier hari ini'],
-        ['Stok Sangat Kritis (1 s/d 5 pcs)', totalSangatKritis, 'Prioritas 2: Berpotensi habis dalam 1-2 hari ke depan'],
-        ['Stok Menipis (6 s/d 10 pcs)', totalMenipis, 'Prioritas 3: Persiapan jadwal pemesanan mingguan'],
-        [],
-        ['ESTIMASI KUANTITAS PEMESANAN', 'JUMLAH (PCS)', 'KETERANGAN'],
-        ['Total Estimasi Order PB', totalPcsOrder, 'Akumulasi kuantitas barang yang direkomendasikan']
+    ws2.mergeCells('A2:C2');
+    const s2Sub = ws2.getCell('A2');
+    s2Sub.value = 'OMI TITAN EKSEKUTIF MART (O8BM)';
+    s2Sub.font = { name: 'Arial', size: 10, italic: true, color: { argb: 'FFD9E1F2' } };
+    s2Sub.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2F5597' } };
+    s2Sub.alignment = { horizontal: 'center', vertical: 'middle' };
+    ws2.getRow(2).height = 20;
+
+    ws2.getRow(4).values = ['PARAMETER MONITORING', 'JUMLAH (SKU)', 'KETERANGAN & TINDAKAN'];
+    ws2.getRow(4).height = 22;
+    ws2.getRow(4).eachCell(cell => {
+        cell.font = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.border = thinBorder;
+    });
+
+    const kpis = [
+        ['Total Produk Pareto Dianalisa', totalItem, 'Seluruh produk pareto aktif di sistem POS', 'FFFFFFFF'],
+        ['Total Produk Membutuhkan Restock', totalKritis, 'Produk dengan sisa stok fisik <= 10 pcs', 'FFF2F2F2'],
+        ['Stok Habis / Kosong (0 atau minus)', totalKosong, 'Prioritas 1: Segera buatkan PO/PB ke suplier hari ini', 'FFFCE4D6'],
+        ['Stok Sangat Kritis (1 s/d 5 pcs)', totalSangatKritis, 'Prioritas 2: Berpotensi habis dalam 1-2 hari ke depan', 'FFFFF2CC'],
+        ['Stok Menipis (6 s/d 10 pcs)', totalMenipis, 'Prioritas 3: Persiapan jadwal pemesanan mingguan', 'FFFFFFFF']
     ];
 
-    const wsSummary = xlsx.utils.aoa_to_sheet(rowsSummary);
-    wsSummary['!cols'] = [
-        { wch: 38 },
-        { wch: 16 },
-        { wch: 45 }
+    kpis.forEach((kpi, i) => {
+        const r = ws2.getRow(5 + i);
+        r.values = [kpi[0], kpi[1], kpi[2]];
+        r.height = 22;
+        r.eachCell((cell, col) => {
+            cell.font = { name: 'Arial', size: 9.5, bold: (col === 2) };
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: kpi[3] } };
+            cell.border = thinBorder;
+            cell.alignment = { horizontal: col === 2 ? 'center' : 'left', vertical: 'middle' };
+        });
+    });
+
+    ws2.columns = [
+        { width: 38 },
+        { width: 16 },
+        { width: 55 }
     ];
 
-    xlsx.utils.book_append_sheet(wb, wsSummary, 'Ringkasan Eksekutif');
-
-    xlsx.writeFile(wb, outputPath);
+    await wb.xlsx.writeFile(outputPath);
     return outputPath;
 }
 
