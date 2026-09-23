@@ -1,16 +1,23 @@
 {
   "admin": "6285852559058",
+  "admin_lid": "215633832722432",
   "admin_secondary": "6285123338591",
-  "admin_lid": "168779396993221",
+  "admin_secondary_lid": "168779396993221",
   "super_admins": [
     "6285852559058",
+    "215633832722432",
     "6285123338591",
     "168779396993221"
   ],
   "users": [
     {
       "number": "6285852559058",
-      "name": "Super Admin Utama",
+      "name": "Super Admin Utama (085852559058)",
+      "role": "super_admin"
+    },
+    {
+      "number": "215633832722432",
+      "name": "Super Admin Utama (LID WhatsApp)",
       "role": "super_admin"
     },
     {
@@ -20,7 +27,7 @@
     },
     {
       "number": "168779396993221",
-      "name": "Super Admin HP (LID)",
+      "name": "Super Admin HP Cadangan (LID)",
       "role": "super_admin"
     }
   ]

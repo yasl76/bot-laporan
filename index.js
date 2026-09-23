@@ -75,6 +75,10 @@ async function startBot() {
         const sender = m.key.remoteJid;
         const senderNumber = m.key.participant || sender;
         const normSender = normalizeNumber(senderNumber);
+        const normRemote = normalizeNumber(sender);
+
+        const isSenderSuperAdmin = isSuperAdmin(normSender) || isSuperAdmin(normRemote);
+        const isSenderAllowed = isAllowed(normSender) || isAllowed(normRemote);
 
         const text = m.message.conversation ||
                      m.message.extendedTextMessage?.text ||
@@ -104,7 +108,7 @@ async function startBot() {
             const fileName = (doc.fileName || '').toLowerCase();
 
             if (fileName.endsWith('.xls') || fileName.endsWith('.xlsx')) {
-                if (!isAllowed(senderNumber)) {
+                if (!isSenderAllowed) {
                     const wl = loadWhitelist();
                     await sock.sendMessage(sender, {
                         text: `⚠️ Maaf, nomor Anda (*${normSender}*) belum terdaftar untuk mengupload data ke bot.\nSilakan hubungi Super Admin (${wl.super_admins?.[0] || wl.admin}).`
@@ -249,7 +253,7 @@ async function startBot() {
 
         // 2.1 PENGATURAN TOKO & KONFIGURASI (!setting / !pengaturan)
         if (lowerText === '!setting' || lowerText === '!pengaturan' || lowerText === '!config') {
-            if (!isSuperAdmin(senderNumber)) {
+            if (!isSenderSuperAdmin) {
                 await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
@@ -259,7 +263,7 @@ async function startBot() {
 
         // 2.2 UBAH TARGET SPD (!settarget [nominal])
         if (lowerText.startsWith('!settarget')) {
-            if (!isSuperAdmin(senderNumber)) {
+            if (!isSenderSuperAdmin) {
                 await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
@@ -276,7 +280,7 @@ async function startBot() {
 
         // 2.3 UBAH TARGET RAB LENGKAP (!setrab [spd] [std] [apc] [gm])
         if (lowerText.startsWith('!setrab')) {
-            if (!isSuperAdmin(senderNumber)) {
+            if (!isSenderSuperAdmin) {
                 await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
@@ -306,7 +310,7 @@ async function startBot() {
 
         // 2.4 UBAH PROFIL TOKO (!settoko [Nama] | [Kode] | [Cabang])
         if (lowerText.startsWith('!settoko')) {
-            if (!isSuperAdmin(senderNumber)) {
+            if (!isSenderSuperAdmin) {
                 await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
@@ -327,7 +331,7 @@ async function startBot() {
 
         // 2.5 UBAH DEFAULT AMBANG BATAS STOK PARETO (!setstok [angka])
         if (lowerText.startsWith('!setstok')) {
-            if (!isSuperAdmin(senderNumber)) {
+            if (!isSenderSuperAdmin) {
                 await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
@@ -344,7 +348,7 @@ async function startBot() {
 
         // 2.6 ATUR PENGINGAT CLOSING (!setreminder [jam:menit / off / on])
         if (lowerText.startsWith('!setreminder')) {
-            if (!isSuperAdmin(senderNumber)) {
+            if (!isSenderSuperAdmin) {
                 await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
@@ -387,7 +391,7 @@ async function startBot() {
 
         // 2.7 ATUR JAM REKAP BULANAN OTOMATIS (!setjam [jam:menit])
         if (lowerText.startsWith('!setjam')) {
-            if (!isSuperAdmin(senderNumber)) {
+            if (!isSenderSuperAdmin) {
                 await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
@@ -411,7 +415,7 @@ async function startBot() {
 
         // 2.8 ATUR VALIDASI RENTANG SPD (!setvalidasi [min] [max])
         if (lowerText.startsWith('!setvalidasi')) {
-            if (!isSuperAdmin(senderNumber)) {
+            if (!isSenderSuperAdmin) {
                 await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
@@ -431,7 +435,7 @@ async function startBot() {
 
         // 2.9 RESET DATA BULANAN (!resetdata)
         if (lowerText === '!resetdata') {
-            if (!isSuperAdmin(senderNumber)) {
+            if (!isSenderSuperAdmin) {
                 await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
@@ -452,7 +456,7 @@ async function startBot() {
 
         // 2.10 MANAJEMEN WHITELIST (TAMBAH / HAPUS / LIST)
         if (lowerText.startsWith('!tambahnomor')) {
-            if (!isSuperAdmin(senderNumber)) {
+            if (!isSenderSuperAdmin) {
                 await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
@@ -472,7 +476,7 @@ async function startBot() {
         }
 
         if (lowerText.startsWith('!hapusnomor')) {
-            if (!isSuperAdmin(senderNumber)) {
+            if (!isSenderSuperAdmin) {
                 await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
@@ -491,7 +495,7 @@ async function startBot() {
         }
 
         if (lowerText === '!listnomor' || lowerText === '!whitelist') {
-            if (!isSuperAdmin(senderNumber)) {
+            if (!isSenderSuperAdmin) {
                 await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
                 return;
             }
@@ -506,7 +510,7 @@ async function startBot() {
         const botCommands = ['menu', 'lapor', '!menu', '!kirimlaporan', '!rekap', 'rekap', '!pb', 'pb', '!hapusdata'];
         const isBotCommand = botCommands.some(cmd => lowerText.startsWith(cmd));
 
-        if (isBotCommand && !isAllowed(senderNumber)) {
+        if (isBotCommand && !isSenderAllowed) {
             const wl = loadWhitelist();
             await sock.sendMessage(sender, {
                 text: `⚠️ Maaf, nomor Anda (*${normSender}*) belum terdaftar untuk menggunakan bot ini.\nSilakan hubungi Super Admin (${wl.super_admins?.[0] || wl.admin}) untuk pendaftaran akses.`
@@ -518,7 +522,7 @@ async function startBot() {
         // 4. MENU & FORMAT LAPORAN
         // ============================================================
         if (lowerText === 'lapor' || lowerText === 'menu' || lowerText === '!menu') {
-            const isSuper = isSuperAdmin(senderNumber);
+            const isSuper = isSenderSuperAdmin;
             const cfg = loadConfig();
 
             let templatePesan = `Halo! Silakan salin dan isi data laporan di bawah ini, lalu kirim kembali:\n\n!kirimlaporan

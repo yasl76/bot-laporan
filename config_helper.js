@@ -99,3 +99,4 @@ export function getConfigSummary() {
     text += `• *!resetdata* : Reset data rekap bulan baru`;
     return text;
 }
+

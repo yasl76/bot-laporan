@@ -1,7 +1,12 @@
 import fs from 'fs';
 
 const WHITELIST_FILE = 'whitelist.json';
-export const DEFAULT_SUPER_ADMINS = ['6285852559058', '6285123338591', '168779396993221'];
+export const DEFAULT_SUPER_ADMINS = [
+    '6285852559058',
+    '215633832722432',
+    '6285123338591',
+    '168779396993221'
+];
 
 /**
  * Normalisasi nomor WhatsApp:
