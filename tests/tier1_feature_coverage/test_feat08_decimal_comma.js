@@ -14,9 +14,10 @@ export function parseAndValidateSetrab(commandArgs) {
         return { valid: false, error: 'Argumen tidak lengkap' };
     }
 
-    const spd = parseFloat(parts[0].replace(/[^0-9]/g, ''));
-    const std = parseInt(parts[1].replace(/[^0-9]/g, ''));
-    const apc = parseFloat(parts[2].replace(/[^0-9]/g, ''));
+    const spd = parseFloat(parts[0].replace(/[^0-9.-]/g, ''));
+    const std = parseInt(parts[1].replace(/[^0-9.-]/g, ''));
+    const apc = parseFloat(parts[2].replace(/[^0-9.-]/g, ''));
+
     
     // Normalization for GM%: handles '21,00' -> '21.00', '21.5%' -> '21.5'
     const rawGm = parts[3].replace(/%/g, '').replace(/,/g, '.').trim();

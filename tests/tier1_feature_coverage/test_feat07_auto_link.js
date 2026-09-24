@@ -27,8 +27,9 @@ export function handleIncomingMessageAutoLink(senderJid, candidatePhoneNumbers =
                 saveWhitelist(wl);
                 return { linked: true, user: matchedUser };
             }
-            return { alreadyLinked: true, user: matchedUser };
+            return { linked: false, alreadyLinked: true, user: matchedUser };
         }
+
     }
     return { linked: false, user: null };
 }
