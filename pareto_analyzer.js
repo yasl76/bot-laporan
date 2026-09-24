@@ -4,6 +4,29 @@ import fs from 'fs';
 import path from 'path';
 
 /**
+ * Parsing angka aman yang menangani locale Indonesia (koma sebagai desimal)
+ * dan mencegah nilai non-finite / NaN.
+ */
+export function parseSafeFloat(val) {
+    if (val === undefined || val === null) return 0;
+    if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
+    let str = String(val).trim();
+    if (!str) return 0;
+    if (str.includes(',') && str.includes('.')) {
+        if (str.indexOf('.') < str.indexOf(',')) {
+            str = str.replace(/\./g, '').replace(',', '.');
+        } else {
+            str = str.replace(/,/g, '');
+        }
+    } else if (str.includes(',')) {
+        str = str.replace(',', '.');
+    }
+    const clean = str.replace(/[^0-9.-]/g, '');
+    const num = parseFloat(clean);
+    return Number.isFinite(num) ? num : 0;
+}
+
+/**
  * Mencari file pareto terbaru di folder kerja
  */
 export function getLatestParetoFile(baseDir = '.') {
@@ -108,11 +131,10 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
         }
 
         const no = parseInt(row[colMap.no]) || (allItems.length + 1);
-        const qtyJual = parseFloat(String(row[colMap.qtyJual] || '0').replace(/[^0-9.-]/g, '')) || 0;
-        const pkm = parseFloat(String(row[colMap.pkm] || '0').replace(/[^0-9.-]/g, '')) || 0;
-        const ft = parseFloat(String(row[colMap.ft] || '0').replace(/[^0-9.-]/g, '')) || 0;
-        const rawStock = String(row[colMap.qtyStock] !== undefined ? row[colMap.qtyStock] : '0').replace(/[^0-9.-]/g, '');
-        const qtyStock = parseFloat(rawStock) || 0;
+        const qtyJual = parseSafeFloat(row[colMap.qtyJual]);
+        const pkm = parseSafeFloat(row[colMap.pkm]);
+        const ft = parseSafeFloat(row[colMap.ft]);
+        const qtyStock = parseSafeFloat(row[colMap.qtyStock]);
 
         let rekomendasiOrder = 0;
         if (pkm > qtyStock) {
@@ -292,7 +314,9 @@ export async function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_P
         let orderDus = `${item.rekomendasiOrder} Pcs`;
         if (item.ft > 1 && item.rekomendasiOrder > 0) {
             const jumlahDus = Math.ceil(item.rekomendasiOrder / item.ft);
-            orderDus = `${jumlahDus} Dus (${item.rekomendasiOrder} Pcs)`;
+            if (Number.isFinite(jumlahDus) && jumlahDus > 0) {
+                orderDus = `${jumlahDus} Dus (${item.rekomendasiOrder} Pcs)`;
+            }
         }
 
         row.values = [
@@ -430,17 +454,24 @@ export function getPbSummaryText(analysisResult, limit = 10, storeInfo = null) {
     }
     text += `📊 *Total Perlu Restock: ${totalKritis} Item*\n\n`;
 
-    text += `🚨 *TOP ${Math.min(limit, lowStockItems.length)} ITEM PALING URGENT RESTOCK:*\n`;
-    lowStockItems.slice(0, limit).forEach((item, idx) => {
-        let orderSatuan = `${item.rekomendasiOrder} pcs`;
-        if (item.ft > 1) {
-            const dus = Math.ceil(item.rekomendasiOrder / item.ft);
-            orderSatuan = `${dus} Dus (${item.rekomendasiOrder} pcs)`;
-        }
+    if (lowStockItems.length === 0) {
+        text += `✅ *SEMUA STOK DALAM KONDISI AMAN!*\n`;
+        text += `Tidak ada item yang berada di bawah ambang batas stok (<= ${maxStockThreshold} pcs).\n`;
+    } else {
+        text += `🚨 *TOP ${Math.min(limit, lowStockItems.length)} ITEM PALING URGENT RESTOCK:*\n`;
+        lowStockItems.slice(0, limit).forEach((item, idx) => {
+            let orderSatuan = `${item.rekomendasiOrder} pcs`;
+            if (item.ft > 1 && item.rekomendasiOrder > 0) {
+                const dus = Math.ceil(item.rekomendasiOrder / item.ft);
+                if (Number.isFinite(dus) && dus > 0) {
+                    orderSatuan = `${dus} Dus (${item.rekomendasiOrder} pcs)`;
+                }
+            }
 
-        text += `${idx + 1}. *${item.nama}* (Rank: #${item.no} | PLU: ${item.plu})\n`;
-        text += `   ↳ Sisa Stok: *${item.qtyStock}* | PKM: ${item.pkm} | Rekomendasi: *${orderSatuan}*\n`;
-    });
+            text += `${idx + 1}. *${item.nama}* (Rank: #${item.no} | PLU: ${item.plu})\n`;
+            text += `   ↳ Sisa Stok: *${item.qtyStock}* | PKM: ${item.pkm} | Rekomendasi: *${orderSatuan}*\n`;
+        });
+    }
 
     text += `\n----------------------------------------\n`;
     text += `💡 _Ketik *!pb excel* untuk mengunduh laporan Excel lengkap (tabel terurut dengan fitur filter & estimasi dus)._`;

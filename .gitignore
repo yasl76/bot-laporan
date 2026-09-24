@@ -21,3 +21,11 @@ test_*.xlsx
 .DS_Store
 Thumbs.db
 bot-laporan/
+
+# Python & Temporary Artifacts
+__pycache__/
+*.pyc
+monitoring_report.json
+monitoring_report.md
+status_alert.txt
+.agents/

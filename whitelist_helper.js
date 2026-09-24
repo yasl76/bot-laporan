@@ -145,7 +145,7 @@ export function addNumber(number, name = 'Karyawan Toko', lid = '') {
         return { success: false, message: '⚠️ Format nomor tidak valid. Masukkan nomor HP Indonesia yang benar (cth: 08123456789).' };
     }
 
-    const normLid = lid ? normalizeNumber(lid) : '';
+    const normLid = lid ? normalizeNumber(lid) : null;
     const data = loadWhitelist();
     const existing = data.users.find(u => 
         normalizeNumber(u.number) === norm || 
@@ -163,10 +163,7 @@ export function addNumber(number, name = 'Karyawan Toko', lid = '') {
         return { success: false, message: `ℹ️ Nomor *${norm}* (${existing.name}) sudah terdaftar sebagai *${existing.role || 'admin_biasa'}*.` };
     }
 
-    const newUser = { number: norm, name, role: 'admin_biasa' };
-    if (normLid) {
-        newUser.lid = normLid;
-    }
+    const newUser = { number: norm, name, role: 'admin_biasa', lid: normLid };
     data.users.push(newUser);
     saveWhitelist(data);
     return {
@@ -174,6 +171,26 @@ export function addNumber(number, name = 'Karyawan Toko', lid = '') {
         message: `✅ Berhasil menambahkan Admin Biasa!\n• Nomor: *${norm}*${normLid ? `\n• LID   : *${normLid}*` : ''}\n• Nama  : *${name}*\n• Peran : *Admin Biasa (Operasional)*`
     };
 }
+
+/**
+ * Menautkan LID WhatsApp ke nomor telepon terdaftar
+ */
+export function linkLid(phoneNumber, lid) {
+    const normPhone = normalizeNumber(phoneNumber);
+    const normLid = normalizeNumber(lid);
+    if (!normPhone || !normLid) {
+        return { success: false, message: '⚠️ Nomor HP dan LID harus valid.' };
+    }
+    const data = loadWhitelist();
+    const user = data.users.find(u => normalizeNumber(u.number) === normPhone);
+    if (!user) {
+        return { success: false, message: `⚠️ Nomor HP *${normPhone}* belum terdaftar dalam whitelist. Tambahkan dulu dengan *!tambahnomor*.` };
+    }
+    user.lid = normLid;
+    saveWhitelist(data);
+    return { success: true, message: `✅ Berhasil menautkan LID *${normLid}* ke akun *${user.name}* (${user.number})!` };
+}
+
 
 /**
  * Hapus nomor dari whitelist

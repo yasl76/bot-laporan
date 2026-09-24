@@ -6,7 +6,7 @@ Bot WhatsApp otomatisasi pelaporan kinerja penjualan harian, rekapitulasi perfor
 
 ## 🚀 Fitur Unggulan
 
-### 1. 👑 Sistem Hak Akses Dua Tingkat (Super Admin vs Admin Biasa)
+### 1.  Sistem Hak Akses Dua Tingkat (Super Admin vs Admin Biasa)
 * **Super Admin:** Memegang kendali penuh atas pengaturan toko dinamis, manajemen whitelist, reset data bulanan, dan seluruh fitur operasional.
 * **Admin Biasa (Karyawan / Kasir):** Didaftarkan oleh Super Admin (`!tambahnomor`) untuk operasional toko harian (`menu`, `!kirimlaporan`, `!rekap`, `!pb`, upload pareto, `!hapusdata`), namun diblokir dari perintah konfigurasi sistem.
 * **Kompatibilitas WhatsApp Multi-Device (LID Support):** Mendukung auto-lookup dan mapping Linked Device Identifier (LID) sehingga karyawan tidak akan tertolak saat chat dari berbagai perangkat tertaut.
@@ -33,7 +33,7 @@ Konfigurasi tersimpan persisten di `config.json` dan dapat diubah langsung via c
 * **Stock Opname:** Pencatatan temuan MPP (expired/rusak) dan NBH (barang hilang).
 * **Validasi Anomali:** Peringatan otomatis jika SPD yang diinput berada di luar batas wajar.
 
-### 4. 📦 Alur Konfirmasi Interaktif Analisa Stok Pareto (PB)
+### 4.  Alur Konfirmasi Interaktif Analisa Stok Pareto (PB)
 * **Upload Dokumen Interaktif:** Saat file pareto (`.xls`/`.xlsx`) diunggah, bot menanyakan pilihan batas stok (`10` untuk standar, `5` untuk urgent, atau angka kustom).
 * **Shortcut Cepat:** Bisa upload dengan caption `!pb 5` atau ketik perintah `!pb [angka]` / `!pb excel [angka]`.
 * **Spreadsheet Modern (ExcelJS):** Menghasilkan file Excel berformat rapi dengan tema Navy Blue, freeze panes, auto-filter, pewarnaan prioritas sel (merah untuk stok 0, amber untuk stok 1-5), serta estimasi konversi Karton/Dus (FT).
