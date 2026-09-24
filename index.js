@@ -89,10 +89,13 @@ async function startBot() {
         const isSenderAllowed = candidates.some(c => isAllowed(c));
 
         // Auto-link LID WhatsApp ke pengguna terdaftar jika belum tersimpan
-        if (sender.endsWith('@lid') && isSenderAllowed) {
+        if (sender.endsWith('@lid')) {
             const currentLid = normalizeNumber(sender);
             const wl = loadWhitelist();
-            const matchedUser = wl.users.find(u => candidates.includes(normalizeNumber(u.number)));
+            const matchedUser = wl.users.find(u => 
+                (candidates.length > 0 && candidates.some(c => c !== currentLid && normalizeNumber(u.number) === c)) ||
+                (u.lid && normalizeNumber(u.lid) === currentLid)
+            );
             if (matchedUser && !matchedUser.lid) {
                 matchedUser.lid = currentLid;
                 saveWhitelist(wl);
@@ -153,20 +156,28 @@ async function startBot() {
                             text: `⏳ Mengunduh dan menganalisa dokumen pareto *${doc.fileName}* (Ambang Batas Stok <= *${directThreshold} pcs*)...`
                         });
 
-                        const analysis = analyzePareto(savedPath, directThreshold);
-                        const summaryText = getPbSummaryText(analysis, 10, storeInfo);
-                        const excelOutput = `Laporan_PB_Pareto_${Date.now()}.xlsx`;
-                        await generatePbExcel(analysis, excelOutput, storeInfo);
+                        let excelOutput = null;
+                        try {
+                            const analysis = analyzePareto(savedPath, directThreshold);
+                            const summaryText = getPbSummaryText(analysis, 10, storeInfo);
+                            excelOutput = `Laporan_PB_Pareto_${Date.now()}.xlsx`;
+                            await generatePbExcel(analysis, excelOutput, storeInfo);
 
-                        await sock.sendMessage(sender, { text: summaryText });
-                        await sock.sendMessage(sender, {
-                            document: fs.readFileSync(excelOutput),
-                            mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                            fileName: `Laporan_PB_Pareto_${new Date().toLocaleDateString('id-ID').replace(/[\/\s]/g, '-')}.xlsx`,
-                            caption: `📊 *Hasil Analisa Dokumen Pareto (Batas: <= ${directThreshold} pcs)*\nFile Excel rekomendasi restock ${analysis.totalKritis} item kritis siap kirim ke supplier.`
-                        });
-
-                        try { fs.unlinkSync(excelOutput); } catch (_) {}
+                            await sock.sendMessage(sender, { text: summaryText });
+                            await sock.sendMessage(sender, {
+                                document: fs.readFileSync(excelOutput),
+                                mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                fileName: `Laporan_PB_Pareto_${new Date().toLocaleDateString('id-ID').replace(/[\/\s]/g, '-')}.xlsx`,
+                                caption: `📊 *Hasil Analisa Dokumen Pareto (Batas: <= ${directThreshold} pcs)*\nFile Excel rekomendasi restock ${analysis.totalKritis} item kritis siap kirim ke supplier.`
+                            });
+                        } finally {
+                            if (excelOutput) {
+                                try { fs.unlinkSync(excelOutput); } catch (_) {}
+                            }
+                            if (savedPath) {
+                                try { fs.unlinkSync(savedPath); } catch (_) {}
+                            }
+                        }
                         return;
                     }
 
@@ -230,12 +241,13 @@ async function startBot() {
                     text: `⏳ Sedang menganalisa dokumen *${pending.fileName}* dengan ambang batas stok <= *${chosenThreshold} pcs*...`
                 });
 
+                let excelOutput = null;
                 try {
                     const cfg = loadConfig();
                     const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
                     const analysis = analyzePareto(pending.filePath, chosenThreshold);
                     const summaryText = getPbSummaryText(analysis, 10, storeInfo);
-                    const excelOutput = `Laporan_PB_Pareto_${Date.now()}.xlsx`;
+                    excelOutput = `Laporan_PB_Pareto_${Date.now()}.xlsx`;
                     await generatePbExcel(analysis, excelOutput, storeInfo);
 
                     await sock.sendMessage(sender, { text: summaryText });
@@ -245,13 +257,18 @@ async function startBot() {
                         fileName: `Laporan_PB_Pareto_${new Date().toLocaleDateString('id-ID').replace(/[\/\s]/g, '-')}.xlsx`,
                         caption: `📊 *Hasil Analisa Dokumen Pareto (Batas: <= ${chosenThreshold} pcs)*\nFile Excel rekomendasi restock ${analysis.totalKritis} item kritis siap kirim ke supplier.`
                     });
-
-                    try { fs.unlinkSync(excelOutput); } catch (_) {}
                     return;
                 } catch (err) {
                     console.error('Error saat analisa interaktif:', err);
                     await sock.sendMessage(sender, { text: `❌ Terjadi kesalahan analisa pareto: ${err.message}` });
                     return;
+                } finally {
+                    if (excelOutput) {
+                        try { fs.unlinkSync(excelOutput); } catch (_) {}
+                    }
+                    if (pending.filePath) {
+                        try { fs.unlinkSync(pending.filePath); } catch (_) {}
+                    }
                 }
             } else {
                 // Jika user mengetik perintah bot lain, bersihkan pending upload agar tidak tersangkut
@@ -314,9 +331,9 @@ async function startBot() {
             const spd = parseNominal(parts[1]);
             const std = parseNominal(parts[2]);
             const apc = parseNominal(parts[3]);
-            const gm = parts[4].replace(/%/g, '').trim();
+            const gm = parts[4].replace(/%/g, '').replace(/,/g, '.').trim();
 
-            if (!spd || !std || !apc || !gm) {
+            if (!spd || spd <= 0 || !std || std <= 0 || !apc || apc <= 0 || isNaN(parseFloat(gm)) || parseFloat(gm) <= 0) {
                 await sock.sendMessage(sender, { text: '⚠️ Nilai angka target RAB tidak valid. Mohon periksa kembali!' });
                 return;
             }
@@ -505,10 +522,13 @@ async function startBot() {
 
             // Lookup otomatis LID WhatsApp untuk nomor HP tersebut
             let resolvedLid = '';
+            const normTarget = normalizeNumber(targetNumber);
             try {
-                const waLookup = await sock.onWhatsApp(targetNumber);
-                if (waLookup && waLookup.length > 0 && waLookup[0].lid) {
-                    resolvedLid = normalizeNumber(waLookup[0].lid);
+                if (normTarget) {
+                    const waLookup = await sock.onWhatsApp(normTarget);
+                    if (waLookup && waLookup.length > 0 && waLookup[0].lid) {
+                        resolvedLid = normalizeNumber(waLookup[0].lid);
+                    }
                 }
             } catch (e) {
                 console.log('Tidak dapat lookup LID onWhatsApp:', e.message);
@@ -516,6 +536,31 @@ async function startBot() {
 
             const res = addNumber(targetNumber, targetName, resolvedLid);
             await sock.sendMessage(sender, { text: res.message });
+            return;
+        }
+
+        // 2.11 TAUTKAN LID SECARA MANUAL (!linklid [nomor_hp] [lid])
+        if (lowerText.startsWith('!linklid')) {
+            if (!isSenderSuperAdmin) {
+                await sock.sendMessage(sender, { text: '⛔ Perintah ini hanya dapat diakses oleh *Super Admin*.' });
+                return;
+            }
+            const parts = cleanText.split(/\s+/);
+            if (parts.length < 3) {
+                await sock.sendMessage(sender, { text: '⚠️ Format salah. Contoh:\n*!linklid 082264017152 215633832722432*' });
+                return;
+            }
+            const targetPhone = normalizeNumber(parts[1]);
+            const targetLid = normalizeNumber(parts[2]);
+            const wl = loadWhitelist();
+            const user = wl.users.find(u => normalizeNumber(u.number) === targetPhone);
+            if (!user) {
+                await sock.sendMessage(sender, { text: `⚠️ Nomor HP *${targetPhone}* belum terdaftar dalam whitelist. Tambahkan dulu dengan *!tambahnomor*.` });
+                return;
+            }
+            user.lid = targetLid;
+            saveWhitelist(wl);
+            await sock.sendMessage(sender, { text: `✅ Berhasil menautkan LID *${targetLid}* ke akun *${user.name}* (${user.number})!` });
             return;
         }
 
@@ -666,6 +711,7 @@ Total NBH:
                 return;
             }
 
+            let outPath = null;
             try {
                 const cfg = loadConfig();
                 const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
@@ -684,7 +730,7 @@ Total NBH:
                 const analysis = analyzePareto(latestFile, threshold);
                 const options = { day: 'numeric', month: 'long', year: 'numeric' };
                 const todayClean = new Date().toLocaleDateString('id-ID', options).replace(/[\s]/g, '_');
-                const outPath = `Laporan_PB_Pareto_${Date.now()}.xlsx`;
+                outPath = `Laporan_PB_Pareto_${Date.now()}.xlsx`;
                 await generatePbExcel(analysis, outPath, storeInfo);
 
                 await sock.sendMessage(sender, {
@@ -693,10 +739,12 @@ Total NBH:
                     fileName: `Laporan_PB_Pareto_${todayClean}.xlsx`,
                     caption: `📊 *Laporan Rekomendasi PB (Pareto Toko)*\nTotal: ${analysis.totalKritis} item kritis yang perlu di-restock oleh suplier.`
                 });
-
-                try { fs.unlinkSync(outPath); } catch (_) {}
             } catch (err) {
                 await sock.sendMessage(sender, { text: `❌ Terjadi kesalahan: ${err.message}` });
+            } finally {
+                if (outPath) {
+                    try { fs.unlinkSync(outPath); } catch (_) {}
+                }
             }
             return;
         }
@@ -710,6 +758,7 @@ Total NBH:
                 return;
             }
 
+            let outPath = null;
             try {
                 await sock.sendMessage(sender, { text: '⏳ Sedang meng-generate file Excel rekapitulasi performa toko...' });
                 const cfg = loadConfig();
@@ -720,7 +769,7 @@ Total NBH:
 
                 const options = { month: 'long', year: 'numeric' };
                 const monthClean = new Date().toLocaleDateString('id-ID', options).replace(/[\s]/g, '_');
-                const outPath = `Rekap_Bulanan_${Date.now()}.xlsx`;
+                outPath = `Rekap_Bulanan_${Date.now()}.xlsx`;
 
                 generateRekapExcel(dataList, outPath, cfg.target_spd, storeInfo);
 
@@ -730,10 +779,12 @@ Total NBH:
                     fileName: `Rekap_Bulanan_${monthClean}.xlsx`,
                     caption: `📊 *File Rekapitulasi Penjualan Harian & Bulanan*\n${cfg.nama_toko} (${cfg.kode_toko})`
                 });
-
-                try { fs.unlinkSync(outPath); } catch (_) {}
             } catch (err) {
                 await sock.sendMessage(sender, { text: `❌ Terjadi kesalahan: ${err.message}` });
+            } finally {
+                if (outPath) {
+                    try { fs.unlinkSync(outPath); } catch (_) {}
+                }
             }
             return;
         }
@@ -1024,37 +1075,41 @@ function setupScheduler(sock) {
                         const wl = loadWhitelist();
                         const options = { month: 'long', year: 'numeric' };
                         const monthName = now.toLocaleDateString('id-ID', options);
-                        const outPath = `Rekap_Bulanan_Otomatis_${monthKey}.xlsx`;
-                        const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
+                        let outPath = null;
+                        try {
+                            outPath = `Rekap_Bulanan_Otomatis_${monthKey}.xlsx`;
+                            const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
+                            generateRekapExcel(list, outPath, cfg.target_spd, storeInfo);
 
-                        generateRekapExcel(list, outPath, cfg.target_spd, storeInfo);
-
-                        const superAdminRecipients = new Set();
-                        if (wl.super_admins && Array.isArray(wl.super_admins)) {
-                            wl.super_admins.forEach(sa => {
-                                const clean = normalizeNumber(sa);
-                                if (clean && clean.length >= 10 && !clean.startsWith('16877')) {
-                                    superAdminRecipients.add(`${clean}@s.whatsapp.net`);
-                                }
-                            });
-                        }
-
-                        for (const adminJid of superAdminRecipients) {
-                            try {
-                                await sock.sendMessage(adminJid, {
-                                    document: fs.readFileSync(outPath),
-                                    mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                                    fileName: `Rekap_Bulanan_${monthName.replace(/\s+/g, '_')}.xlsx`,
-                                    caption: `📢 *REKAP OTOMATIS AKHIR BULAN TELAH SIAP!*\n\nBerikut rekapitulasi data penjualan toko ${cfg.nama_toko} periode *${monthName}*.\nTerima kasih atas kerja keras seluruh tim bulan ini! 🙏`
+                            const superAdminRecipients = new Set();
+                            if (wl.super_admins && Array.isArray(wl.super_admins)) {
+                                wl.super_admins.forEach(sa => {
+                                    const clean = normalizeNumber(sa);
+                                    if (clean && clean.length >= 10 && !clean.startsWith('16877')) {
+                                        superAdminRecipients.add(`${clean}@s.whatsapp.net`);
+                                    }
                                 });
-                            } catch (e) {
-                                console.error('Gagal mengirim rekap bulanan ke super admin:', adminJid, e.message);
+                            }
+
+                            for (const adminJid of superAdminRecipients) {
+                                try {
+                                    await sock.sendMessage(adminJid, {
+                                        document: fs.readFileSync(outPath),
+                                        mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                                        fileName: `Rekap_Bulanan_${monthName.replace(/\s+/g, '_')}.xlsx`,
+                                        caption: `📢 *REKAP OTOMATIS AKHIR BULAN TELAH SIAP!*\n\nBerikut rekapitulasi data penjualan toko ${cfg.nama_toko} periode *${monthName}*.\nTerima kasih atas kerja keras seluruh tim bulan ini! 🙏`
+                                    });
+                                } catch (e) {
+                                    console.error('Gagal mengirim rekap bulanan ke super admin:', adminJid, e.message);
+                                }
+                            }
+                            lastSentMonth = monthKey;
+                            console.log(`✅ Rekap akhir bulan otomatis ${monthKey} berhasil dikirim ke Super Admin.`);
+                        } finally {
+                            if (outPath) {
+                                try { fs.unlinkSync(outPath); } catch (_) {}
                             }
                         }
-
-                        try { fs.unlinkSync(outPath); } catch (_) {}
-                        lastSentMonth = monthKey;
-                        console.log(`✅ Rekap akhir bulan otomatis ${monthKey} berhasil dikirim ke Super Admin.`);
                     }
                 }
             }

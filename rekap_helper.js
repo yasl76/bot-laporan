@@ -30,8 +30,9 @@ export function getStructuredTextRekap(dataList, targetSPD = 4725000, storeInfo 
         totalRte += (item.total_rte || 0);
     });
 
+    const safeTargetSPD = (typeof targetSPD === 'number' && targetSPD > 0) ? targetSPD : (parseFloat(targetSPD) > 0 ? parseFloat(targetSPD) : 4725000);
     const rataSpd = Math.round(totalSpd / jumlahHari);
-    const achMtd = ((rataSpd / targetSPD) * 100).toFixed(2);
+    const achMtd = safeTargetSPD > 0 ? ((rataSpd / safeTargetSPD) * 100).toFixed(2) : '0.00';
 
     let text = `📊 *REKAP PERFORMA TOKO BULAN INI*\n`;
     text += `${namaToko} (${kodeToko})\n`;
@@ -41,7 +42,7 @@ export function getStructuredTextRekap(dataList, targetSPD = 4725000, storeInfo 
     text += `💰 *Akumulasi Sales & Target:*
 - Total SPD Terkumpul   : Rp ${formatRp(totalSpd)}
 - Rata-rata SPD Harian  : Rp ${formatRp(rataSpd)}
-- Target RAB Harian     : Rp ${formatRp(targetSPD)}
+- Target RAB Harian     : Rp ${formatRp(safeTargetSPD)}
 - Pencapaian MTD (ACH)  : *${achMtd}%*\n\n`;
 
     text += `☕ *Akumulasi Penjualan YCCG & RTE:*
@@ -59,7 +60,7 @@ export function getStructuredTextRekap(dataList, targetSPD = 4725000, storeInfo 
     text += `📋 *Riwayat 5 Hari Terakhir:*\n`;
     const sliceDays = dataList.slice(-5);
     sliceDays.forEach(d => {
-        const ach = ((d.spd / targetSPD) * 100).toFixed(1);
+        const ach = safeTargetSPD > 0 ? ((d.spd / safeTargetSPD) * 100).toFixed(1) : '0.0';
         text += `• ${d.tanggal}: SPD Rp ${formatRp(d.spd)} (${ach}%) | YCCG: ${d.yccg || 0} | RTE: ${d.total_rte || 0}\n`;
     });
 
@@ -105,9 +106,11 @@ export function generateRekapExcel(dataList, outputPath = 'Rekap_Bulanan.xlsx', 
         'SO NBH'
     ]);
 
+    const safeTargetSPD = (typeof targetSPD === 'number' && targetSPD > 0) ? targetSPD : (parseFloat(targetSPD) > 0 ? parseFloat(targetSPD) : 4725000);
+
     dataList.forEach((item, idx) => {
-        const achHarian = item.spd ? ((item.spd / targetSPD) * 100).toFixed(2) : '0';
-        const achMtd = item.avg_spd ? ((item.avg_spd / targetSPD) * 100).toFixed(2) : '0';
+        const achHarian = (safeTargetSPD > 0 && item.spd) ? ((item.spd / safeTargetSPD) * 100).toFixed(2) : '0';
+        const achMtd = (safeTargetSPD > 0 && item.avg_spd) ? ((item.avg_spd / safeTargetSPD) * 100).toFixed(2) : '0';
 
         rowsHarian.push([
             idx + 1,
@@ -173,7 +176,7 @@ export function generateRekapExcel(dataList, outputPath = 'Rekap_Bulanan.xlsx', 
     });
 
     const rataSpd = Math.round(totalSpd / jumlahHari);
-    const achMtd = ((rataSpd / targetSPD) * 100).toFixed(2);
+    const achMtd = safeTargetSPD > 0 ? ((rataSpd / safeTargetSPD) * 100).toFixed(2) : '0.00';
 
     const rowsRingkasan = [
         ['RINGKASAN AKUMULASI PERFORMA BULANAN'],
@@ -182,7 +185,7 @@ export function generateRekapExcel(dataList, outputPath = 'Rekap_Bulanan.xlsx', 
         [],
         ['Indikator Performa', 'Nilai / Akumulasi', 'Keterangan'],
         ['Total Hari Masuk', jumlahHari, 'Hari Laporan'],
-        ['Target SPD Harian', targetSPD, 'Target RAB Toko'],
+        ['Target SPD Harian', safeTargetSPD, 'Target RAB Toko'],
         ['Total Akumulasi SPD', totalSpd, 'Rupiah'],
         ['Rata-rata SPD Harian', rataSpd, 'Rupiah'],
         ['Pencapaian MTD (ACH %)', `${achMtd}%`, 'Terhadap Target RAB'],
