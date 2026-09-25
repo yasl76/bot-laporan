@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import qrcode from 'qrcode-terminal';
 
-import { isAllowed, isSuperAdmin, isAdmin, addNumber, removeNumber, listNumbers, normalizeNumber, loadWhitelist } from './whitelist_helper.js';
+import { isAllowed, isSuperAdmin, isAdmin, addNumber, removeNumber, listNumbers, normalizeNumber, loadWhitelist, saveWhitelist, linkLid } from './whitelist_helper.js';
 import { getLatestParetoFile, analyzePareto, generatePbExcel, getPbSummaryText } from './pareto_analyzer.js';
 import { getStructuredTextRekap, generateRekapExcel } from './rekap_helper.js';
 import { loadConfig, updateConfig, getConfigSummary } from './config_helper.js';
