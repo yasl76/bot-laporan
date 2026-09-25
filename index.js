@@ -2,41 +2,12 @@ import { makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMes
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import qrcode from 'qrcode-terminal';
 
-import { isAllowed, isSuperAdmin, isAdmin, addNumber, removeNumber, listNumbers, normalizeNumber, loadWhitelist, linkLid } from './whitelist_helper.js';
-import { getLatestParetoFile, analyzePareto, generatePbExcel, getPbSummaryText, parseSafeFloat } from './pareto_analyzer.js';
-import { getStructuredTextRekap, generateRekapExcel, getSafeTargetSPD } from './rekap_helper.js';
+import { isAllowed, isSuperAdmin, isAdmin, addNumber, removeNumber, listNumbers, normalizeNumber, loadWhitelist } from './whitelist_helper.js';
+import { getLatestParetoFile, analyzePareto, generatePbExcel, getPbSummaryText } from './pareto_analyzer.js';
+import { getStructuredTextRekap, generateRekapExcel } from './rekap_helper.js';
 import { loadConfig, updateConfig, getConfigSummary } from './config_helper.js';
-
-/**
- * Membersihkan file-file sementara yang tertinggal akibat crash atau restart sebelumnya
- */
-export function cleanupOrphanedFiles(baseDir = '.') {
-    try {
-        const files = fs.readdirSync(baseDir);
-        let count = 0;
-        for (const file of files) {
-            if (
-                file.startsWith('pareto_uploaded_') ||
-                file.startsWith('Laporan_PB_Pareto_') ||
-                file.startsWith('Rekap_Bulanan_')
-            ) {
-                try {
-                    const fullPath = path.join(baseDir, file);
-                    fs.unlinkSync(fullPath);
-                    count++;
-                    console.log(`🧹 Membersihkan file temporary sisa sesi sebelumnya: ${file}`);
-                } catch (_) {}
-            }
-        }
-        return count;
-    } catch (e) {
-        console.error('Gagal membersihkan file temporary saat inisialisasi:', e.message);
-        return 0;
-    }
-}
 
 function parseNominal(val) {
     if (val === undefined || val === null) return 0;
@@ -53,7 +24,6 @@ const pendingParetoUploads = new Map();
 
 async function startBot() {
     console.log('⏳ Memulai program bot laporan & analisa pareto toko...');
-    cleanupOrphanedFiles();
 
     const { state, saveCreds } = await useMultiFileAuthState('sesi_bot');
 
@@ -78,6 +48,8 @@ async function startBot() {
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+            const isReplacedByNew = statusCode === 428; // Koneksi digantikan koneksi lain (multi-device)
+            
             console.log(`🔄 Koneksi terputus (Kode: ${statusCode || 'unknown'}), menyambung ulang...`, !isLoggedOut);
 
             if (isLoggedOut) {
@@ -88,12 +60,15 @@ async function startBot() {
                     console.error('Error saat mereset sesi:', e);
                 }
                 setTimeout(startBot, 3000);
+            } else if (isReplacedByNew) {
+                // Kode 428: sesi digantikan perangkat lain. Tunggu lebih lama sebelum reconnect.
+                console.log('⚠️ Koneksi digantikan oleh perangkat/sesi lain. Menunggu 10 detik sebelum reconnect...');
+                setTimeout(startBot, 10000);
             } else {
                 setTimeout(startBot, 5000);
             }
         } else if (connection === 'open') {
             console.log('\n✅ BOT BERHASIL TERHUBUNG & SIAP DIGUNAKAN!');
-            await syncMissingLids(sock);
             setupScheduler(sock);
         }
     });
@@ -116,6 +91,8 @@ async function startBot() {
         ].filter(Boolean);
 
         const normSender = candidates[0] || normalizeNumber(senderNumber);
+        const isSenderSuperAdmin = candidates.some(c => isSuperAdmin(c));
+        const isSenderAllowed = candidates.some(c => isAllowed(c));
 
         // Auto-link LID WhatsApp ke pengguna terdaftar jika belum tersimpan
         if (sender.endsWith('@lid')) {
@@ -131,9 +108,6 @@ async function startBot() {
                 console.log(`🔗 Auto-link LID WhatsApp ${currentLid} ke ${matchedUser.name} (${matchedUser.number})`);
             }
         }
-
-        const isSenderSuperAdmin = candidates.some(c => isSuperAdmin(c));
-        const isSenderAllowed = candidates.some(c => isAllowed(c));
 
         const text = m.message.conversation ||
                      m.message.extendedTextMessage?.text ||
@@ -171,12 +145,10 @@ async function startBot() {
                     return;
                 }
 
-                let savedPath = null;
-                let isHandedOffToPending = false;
                 try {
                     const buffer = await downloadMediaMessage(m, 'buffer', {});
                     const ext = path.extname(doc.fileName) || '.xls';
-                    savedPath = `pareto_uploaded_${Date.now()}${ext}`;
+                    const savedPath = `pareto_uploaded_${Date.now()}${ext}`;
                     fs.writeFileSync(savedPath, buffer);
 
                     const cfg = loadConfig();
@@ -227,7 +199,6 @@ async function startBot() {
                         fileName: doc.fileName || 'Dokumen Pareto',
                         timestamp: Date.now()
                     });
-                    isHandedOffToPending = true;
 
                     const defaultStok = cfg.ambang_stok_pb || 10;
                     const promptText = `📥 *DOKUMEN PARETO DITERIMA!*\n` +
@@ -243,9 +214,6 @@ async function startBot() {
                     return;
                 } catch (err) {
                     console.error('Error memproses dokumen pareto:', err);
-                    if (savedPath && !isHandedOffToPending) {
-                        try { fs.unlinkSync(savedPath); } catch (_) {}
-                    }
                     await sock.sendMessage(sender, { text: `❌ Terjadi kesalahan saat memproses file pareto: ${err.message}` });
                     return;
                 }
@@ -564,13 +532,8 @@ async function startBot() {
             try {
                 if (normTarget) {
                     const waLookup = await sock.onWhatsApp(normTarget);
-                    if (waLookup && waLookup.length > 0) {
-                        const entry = waLookup[0];
-                        if (entry.lid) {
-                            resolvedLid = normalizeNumber(entry.lid);
-                        } else if (entry.jid && entry.jid.endsWith('@lid')) {
-                            resolvedLid = normalizeNumber(entry.jid);
-                        }
+                    if (waLookup && waLookup.length > 0 && waLookup[0].lid) {
+                        resolvedLid = normalizeNumber(waLookup[0].lid);
                     }
                 }
             } catch (e) {
@@ -593,8 +556,17 @@ async function startBot() {
                 await sock.sendMessage(sender, { text: '⚠️ Format salah. Contoh:\n*!linklid 082264017152 215633832722432*' });
                 return;
             }
-            const res = linkLid(parts[1], parts[2]);
-            await sock.sendMessage(sender, { text: res.message });
+            const targetPhone = normalizeNumber(parts[1]);
+            const targetLid = normalizeNumber(parts[2]);
+            const wl = loadWhitelist();
+            const user = wl.users.find(u => normalizeNumber(u.number) === targetPhone);
+            if (!user) {
+                await sock.sendMessage(sender, { text: `⚠️ Nomor HP *${targetPhone}* belum terdaftar dalam whitelist. Tambahkan dulu dengan *!tambahnomor*.` });
+                return;
+            }
+            user.lid = targetLid;
+            saveWhitelist(wl);
+            await sock.sendMessage(sender, { text: `✅ Berhasil menautkan LID *${targetLid}* ke akun *${user.name}* (${user.number})!` });
             return;
         }
 
@@ -940,11 +912,11 @@ Total NBH:
             const today = new Date().toLocaleDateString('id-ID', options);
 
             // Perhitungan Persentase ACH Harian & MTD yang akurat berdasarkan config
-            const targetSpd = getSafeTargetSPD(cfg.target_spd);
-            const achHarian = targetSpd > 0 ? ((numSpd / targetSpd) * 100).toFixed(2) : '0.00';
-            const achMtd = targetSpd > 0
-                ? (numAvgSpd > 0 ? ((numAvgSpd / targetSpd) * 100).toFixed(2) : ((numSpd / targetSpd) * 100).toFixed(2))
-                : '0.00';
+            const targetSpd = cfg.target_spd || 4725000;
+            const achHarian = ((numSpd / targetSpd) * 100).toFixed(2);
+            const achMtd = numAvgSpd > 0
+                ? ((numAvgSpd / targetSpd) * 100).toFixed(2)
+                : ((numSpd / targetSpd) * 100).toFixed(2);
 
             // --- SIMPAN / TIMPA DATA KE FILE REKAP OTOMATIS ---
             const dataBaru = {
@@ -1040,42 +1012,6 @@ Terima kasih 🙏`;
             await sock.sendMessage(sender, { text: laporanTeks });
         }
     });
-}
-
-/**
- * Sinkronisasi otomatis LID WhatsApp untuk nomor-nomor terdaftar yang belum memiliki LID
- */
-async function syncMissingLids(sock) {
-    try {
-        const wl = loadWhitelist();
-        let updated = false;
-        for (const user of (wl.users || [])) {
-            if (!user.lid && user.number) {
-                const normPhone = normalizeNumber(user.number);
-                if (normPhone && normPhone.length >= 9) {
-                    try {
-                        const waLookup = await sock.onWhatsApp(normPhone);
-                        if (waLookup && waLookup.length > 0) {
-                            const entry = waLookup[0];
-                            const resolved = entry.lid ? normalizeNumber(entry.lid) : (entry.jid?.endsWith('@lid') ? normalizeNumber(entry.jid) : '');
-                            if (resolved) {
-                                user.lid = resolved;
-                                updated = true;
-                                console.log(`🔗 Startup sync: Berhasil menautkan LID ${resolved} ke ${user.name} (${user.number})`);
-                            }
-                        }
-                    } catch (err) {
-                        console.log(`Lookup LID gagal untuk ${user.number}:`, err.message);
-                    }
-                }
-            }
-        }
-        if (updated) {
-            saveWhitelist(wl);
-        }
-    } catch (e) {
-        console.error('Error saat syncMissingLids:', e.message);
-    }
 }
 
 /**
@@ -1189,7 +1125,4 @@ function setupScheduler(sock) {
     }, 60 * 1000); // Evaluasi tiap 1 menit
 }
 
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
-if (isMain) {
-    startBot();
-}
+startBot();
