@@ -25,6 +25,35 @@ const pendingParetoUploads = new Map();
 async function startBot() {
     console.log('⏳ Memulai program bot laporan & analisa pareto toko...');
 
+    // ─── AUTO-CLEANUP SESI LAMA ─────────────────────────────────────────────
+    // Hapus file session-*.json yang lebih dari 7 hari agar tidak menumpuk
+    try {
+        const sesiDir = path.resolve('sesi_bot');
+        if (fs.existsSync(sesiDir)) {
+            const now = Date.now();
+            const TUJUH_HARI_MS = 7 * 24 * 60 * 60 * 1000;
+            let cleaned = 0;
+            const files = fs.readdirSync(sesiDir);
+            for (const file of files) {
+                if (!file.startsWith('session-')) continue;
+                const filePath = path.join(sesiDir, file);
+                try {
+                    const stat = fs.statSync(filePath);
+                    if (now - stat.mtimeMs > TUJUH_HARI_MS) {
+                        fs.unlinkSync(filePath);
+                        cleaned++;
+                    }
+                } catch (_) { /* abaikan jika file sudah terhapus */ }
+            }
+            if (cleaned > 0) {
+                console.log(`🧹 Auto-cleanup: ${cleaned} file sesi lama (>7 hari) berhasil dihapus.`);
+            }
+        }
+    } catch (e) {
+        console.error('⚠️ Gagal auto-cleanup sesi:', e.message);
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     const { state, saveCreds } = await useMultiFileAuthState('sesi_bot');
 
     const sock = makeWASocket({
