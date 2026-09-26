@@ -40,14 +40,15 @@ async function startBot() {
                 const filePath = path.join(sesiDir, file);
                 try {
                     const stat = fs.statSync(filePath);
-                    if (now - stat.mtimeMs > TUJUH_HARI_MS) {
+                    // Hapus jika lebih dari 2 hari atau file session yang desinkronisasi
+                    if (now - stat.mtimeMs > 2 * 24 * 60 * 60 * 1000 || file.includes('39995440156688')) {
                         fs.unlinkSync(filePath);
                         cleaned++;
                     }
                 } catch (_) { /* abaikan jika file sudah terhapus */ }
             }
             if (cleaned > 0) {
-                console.log(`🧹 Auto-cleanup: ${cleaned} file sesi lama (>7 hari) berhasil dihapus.`);
+                console.log(`🧹 Auto-cleanup: ${cleaned} file sesi lama/desinkron berhasil dibersihkan.`);
             }
         }
     } catch (e) {
@@ -61,7 +62,10 @@ async function startBot() {
         auth: state,
         printQRInTerminal: false,
         browser: ['Chrome (Linux)', 'Chrome', '10.0.0'],
-        logger: pino({ level: 'silent' })
+        logger: pino({ level: 'silent' }),
+        syncFullHistory: false,
+        shouldIgnoreJid: (jid) => jid?.endsWith('@broadcast') || jid?.includes('status@broadcast'),
+        generateHighQualityLinkPreview: false
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -1241,5 +1245,22 @@ function setupScheduler(sock) {
         }
     }, 60 * 1000); // Evaluasi tiap 1 menit
 }
+
+// Filter error desinkronisasi libsignal agar tidak memenuhi log stderr PM2
+process.on('unhandledRejection', (reason) => {
+    const msg = String(reason?.message || reason || '');
+    if (msg.includes('SessionError') || msg.includes('Over 2000 messages') || msg.includes('closed session') || msg.includes('decrypt message')) {
+        return;
+    }
+    console.error('Unhandled Rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+    const msg = String(err?.message || err || '');
+    if (msg.includes('SessionError') || msg.includes('Over 2000 messages') || msg.includes('closed session') || msg.includes('decrypt message')) {
+        return;
+    }
+    console.error('Uncaught Exception:', err);
+});
 
 startBot();
