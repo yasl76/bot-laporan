@@ -8,16 +8,20 @@ import fs from 'fs';
 import path from 'path';
 import { downloadMediaMessage } from '@whiskeysockets/baileys';
 import { loadWhitelist } from '../whitelist_helper.js';
-import { loadConfig } from '../config_helper.js';
+import { loadConfig, getStoreInfo } from '../config_helper.js';
 import { analyzePareto, generatePbExcel, getPbSummaryText } from '../pareto_analyzer.js';
 import { parsePosJournal, formatPosAuditMessage, getActiveOrLatestShift, calculateVariance, formatVarianceMessage } from '../struk_parser.js';
-import { parseNominal, formatRp } from './formatters.js';
+import { parseNominal, formatRp, formatDateFileName } from './formatters.js';
 
 // In-memory state storage: Map<string, SessionState>
 // Key: normSender (string)
 const userSessions = new Map();
 
 export const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+function isSessionExpired(session) {
+    return Date.now() - session.timestamp > SESSION_TIMEOUT_MS;
+}
 
 /**
  * Checks if user has an active session.
@@ -27,7 +31,7 @@ export const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 export function hasPendingSession(normSender) {
     if (!normSender || !userSessions.has(normSender)) return false;
     const session = userSessions.get(normSender);
-    if (Date.now() - session.timestamp > SESSION_TIMEOUT_MS) {
+    if (isSessionExpired(session)) {
         clearUserSession(normSender);
         return false;
     }
@@ -59,7 +63,7 @@ export function clearUserSession(normSender) {
 export function getUserSession(normSender) {
     if (!normSender || !userSessions.has(normSender)) return null;
     const session = userSessions.get(normSender);
-    if (Date.now() - session.timestamp > SESSION_TIMEOUT_MS) {
+    if (isSessionExpired(session)) {
         clearUserSession(normSender);
         return null;
     }
@@ -156,7 +160,7 @@ export async function handleDocumentUpload(sock, m, senderContext, options = {})
             fs.writeFileSync(savedPath, buffer);
 
             const cfg = loadConfig();
-            const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
+            const storeInfo = getStoreInfo(cfg);
 
             // Direct match flow: !pb [N] (e.g. "!pb 5" or "!pb 15")
             const directMatch = cleanText.match(/^!pb\s+(\d+)$/i);
@@ -178,7 +182,7 @@ export async function handleDocumentUpload(sock, m, senderContext, options = {})
                     await sock.sendMessage(sender, {
                         document: fs.readFileSync(excelOutput),
                         mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                        fileName: `Laporan_PB_Pareto_${new Date().toLocaleDateString('id-ID').replace(/[\/\s]/g, '-')}.xlsx`,
+                        fileName: `Laporan_PB_Pareto_${formatDateFileName(new Date(), 'long')}.xlsx`,
                         caption: `📊 *Hasil Analisa Dokumen Pareto (Batas: <= ${directThreshold} pcs)*\nFile Excel rekomendasi restock ${analysis.totalKritis} item kritis siap kirim ke supplier.`
                     });
                 } finally {
@@ -301,7 +305,7 @@ export async function handleInteractiveResponse(sock, m, senderContext) {
     const session = userSessions.get(normSender);
 
     // Timeout check (10 mins)
-    if (Date.now() - session.timestamp > SESSION_TIMEOUT_MS) {
+    if (isSessionExpired(session)) {
         clearUserSession(normSender);
         return false;
     }
@@ -360,7 +364,7 @@ export async function handleInteractiveResponse(sock, m, senderContext) {
                 });
 
                 const cfg = loadConfig();
-                const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
+                const storeInfo = getStoreInfo(cfg);
                 const analysis = analyzePareto(filePath, chosenThreshold);
                 const summaryText = getPbSummaryText(analysis, 10, storeInfo);
                 excelOutput = `Laporan_PB_Pareto_${Date.now()}.xlsx`;
@@ -370,7 +374,7 @@ export async function handleInteractiveResponse(sock, m, senderContext) {
                 await sock.sendMessage(sender, {
                     document: fs.readFileSync(excelOutput),
                     mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                    fileName: `Laporan_PB_Pareto_${new Date().toLocaleDateString('id-ID').replace(/[\/\s]/g, '-')}.xlsx`,
+                    fileName: `Laporan_PB_Pareto_${formatDateFileName(new Date(), 'long')}.xlsx`,
                     caption: `📊 *Hasil Analisa Dokumen Pareto (Batas: <= ${chosenThreshold} pcs)*\nFile Excel rekomendasi restock ${analysis.totalKritis} item kritis siap kirim ke supplier.`
                 });
             } catch (err) {

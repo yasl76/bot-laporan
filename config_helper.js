@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { formatRp } from './src/formatters.js';
 
 const CONFIG_FILE = 'config.json';
 
@@ -53,7 +54,10 @@ export function updateConfig(updates) {
     return updated;
 }
 
-const formatRp = (angka) => new Intl.NumberFormat('id-ID').format(Math.round(angka) || 0);
+export function getStoreInfo(cfg = null) {
+    const c = cfg || loadConfig();
+    return { nama_toko: c.nama_toko, kode_toko: c.kode_toko, cabang: c.cabang };
+}
 
 export function getConfigSummary() {
     const c = loadConfig();

@@ -14,12 +14,13 @@ import {
     listNumbers,
     normalizeNumber,
     loadWhitelist,
-    saveWhitelist
+    saveWhitelist,
+    linkLid
 } from '../whitelist_helper.js';
-import {
     loadConfig,
     updateConfig,
-    getConfigSummary
+    getConfigSummary,
+    getStoreInfo
 } from '../config_helper.js';
 import {
     getLatestParetoFile,
@@ -40,7 +41,8 @@ import {
     parseNominal,
     formatRp,
     calculateAch,
-    escapeRegex
+    escapeRegex,
+    formatDateFileName
 } from './formatters.js';
 
 /**
@@ -333,19 +335,13 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
                 await sock.sendMessage(sender, { text: '⚠️ Format salah. Contoh:\n*!linklid 082264017152 215633832722432*' });
                 return true;
             }
-            const targetPhone = normalizeNumber(parts[1]);
-            const targetLid = normalizeNumber(parts[2]);
-            const wl = loadWhitelist();
-            const user = wl.users.find(u => normalizeNumber(u.number) === targetPhone);
-            if (!user) {
-                await sock.sendMessage(sender, { text: `⚠️ Nomor HP *${targetPhone}* belum terdaftar dalam whitelist. Tambahkan dulu dengan *!tambahnomor*.` });
-                return true;
-            }
-            user.lid = targetLid;
-            saveWhitelist(wl);
-            await sock.sendMessage(sender, { text: `✅ Berhasil menautkan LID *${targetLid}* ke akun *${user.name}* (${user.number})!` });
+            const targetPhone = parts[1];
+            const targetLid = parts[2];
+            const res = linkLid(targetPhone, targetLid);
+            await sock.sendMessage(sender, { text: res.message });
             return true;
         }
+
 
         // 1.12 HAPUS NOMOR DARI WHITELIST (!hapusnomor [no])
         if (lowerText === '!hapusnomor' || lowerText.startsWith('!hapusnomor ')) {
@@ -508,7 +504,7 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
             let outPath = null;
             try {
                 const cfg = loadConfig();
-                const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
+                const storeInfo = getStoreInfo(cfg);
 
                 const parts = cleanText.split(/\s+/);
                 let threshold = cfg.ambang_stok_pb || 10;
@@ -521,8 +517,7 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
                 });
 
                 const analysis = analyzePareto(latestFile, threshold);
-                const optionsDate = { day: 'numeric', month: 'long', year: 'numeric' };
-                const todayClean = new Date().toLocaleDateString('id-ID', optionsDate).replace(/[\s\/]/g, '_');
+                const todayClean = formatDateFileName(new Date(), 'long');
                 outPath = `Laporan_PB_Pareto_${Date.now()}.xlsx`;
                 await generatePbExcel(analysis, outPath, storeInfo);
 
@@ -557,7 +552,7 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
 
             try {
                 const cfg = loadConfig();
-                const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
+                const storeInfo = getStoreInfo(cfg);
 
                 const parts = cleanText.split(/\s+/);
                 let threshold = cfg.ambang_stok_pb || 10;
@@ -581,7 +576,7 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
         // 2.5 REKAP EXCEL REPORT GENERATION (!rekap excel)
         if (lowerText === '!rekap excel' || lowerText === 'rekap excel') {
             const rekapFile = options?.rekapFilePath || 'rekap_data.json';
-            if (!fs.existsSync(rekapFile) || fs.readFileSync(rekapFile, 'utf8') === '[]') {
+            if (!fs.existsSync(rekapFile) || JSON.parse(fs.readFileSync(rekapFile, 'utf8')).length === 0) {
                 await sock.sendMessage(sender, { text: '⚠️ Belum ada data laporan yang tersimpan untuk di-export ke Excel.' });
                 return true;
             }
@@ -590,13 +585,12 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
             try {
                 await sock.sendMessage(sender, { text: '⏳ Sedang meng-generate file Excel rekapitulasi performa toko...' });
                 const cfg = loadConfig();
-                const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
+                const storeInfo = getStoreInfo(cfg);
 
                 const fileContent = fs.readFileSync(rekapFile, 'utf8');
                 const dataList = JSON.parse(fileContent);
 
-                const optionsDate = { month: 'long', year: 'numeric' };
-                const monthClean = new Date().toLocaleDateString('id-ID', optionsDate).replace(/[\s\/]/g, '_');
+                const monthClean = formatDateFileName(new Date(), 'month');
                 outPath = `Rekap_Bulanan_${Date.now()}.xlsx`;
 
                 generateRekapExcel(dataList, outPath, cfg.target_spd, storeInfo);
@@ -622,13 +616,13 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
         // 2.6 REKAP TEXT SUMMARY (!rekap / rekap)
         if (lowerText === '!rekap' || lowerText === 'rekap') {
             const rekapFile = options?.rekapFilePath || 'rekap_data.json';
-            if (!fs.existsSync(rekapFile) || fs.readFileSync(rekapFile, 'utf8') === '[]') {
+            if (!fs.existsSync(rekapFile) || JSON.parse(fs.readFileSync(rekapFile, 'utf8')).length === 0) {
                 await sock.sendMessage(sender, { text: '⚠️ Belum ada data laporan yang tersimpan untuk direkap bulan ini.' });
                 return true;
             }
 
             const cfg = loadConfig();
-            const storeInfo = { nama_toko: cfg.nama_toko, kode_toko: cfg.kode_toko, cabang: cfg.cabang };
+            const storeInfo = getStoreInfo(cfg);
 
             const fileContent = fs.readFileSync(rekapFile, 'utf8');
             const dataList = JSON.parse(fileContent);

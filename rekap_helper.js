@@ -1,7 +1,7 @@
 import xlsx from 'xlsx';
 import fs from 'fs';
+import { formatRp } from './src/formatters.js';
 
-const formatRp = (angka) => new Intl.NumberFormat('id-ID').format(Math.round(angka) || 0);
 
 export function getSafeTargetSPD(targetSPD, fallback = 4725000) {
     if (typeof targetSPD === 'number' && Number.isFinite(targetSPD) && targetSPD > 0) {
@@ -13,25 +13,8 @@ export function getSafeTargetSPD(targetSPD, fallback = 4725000) {
     }
     return fallback;
 }
-export const safeTargetSPD = getSafeTargetSPD;
-
-export function getStructuredTextRekap(dataList, targetSPD = 4725000, storeInfo = null) {
-    if (!dataList || dataList.length === 0) {
-        return "⚠️ Belum ada data laporan yang tersimpan untuk direkap bulan ini.";
-    }
-
-    const namaToko = storeInfo?.nama_toko || storeInfo?.nama || 'OMI TITAN EKSEKUTIF MART';
-    const kodeToko = storeInfo?.kode_toko || storeInfo?.kode || 'O8BM';
-
-    let totalSpd = 0;
-    let totalMpp = 0;
-    let totalNbh = 0;
-    let totalYccg = 0;
-    let totalSosisOri = 0;
-    let totalSosisKeju = 0;
-    let totalRte = 0;
-    const jumlahHari = dataList.length;
-
+function aggregateRekapData(dataList) {
+    let totalSpd = 0, totalMpp = 0, totalNbh = 0, totalYccg = 0, totalSosisOri = 0, totalSosisKeju = 0, totalRte = 0;
     dataList.forEach(item => {
         totalSpd += (item.spd || 0);
         totalMpp += (item.mpp || 0);
@@ -41,6 +24,19 @@ export function getStructuredTextRekap(dataList, targetSPD = 4725000, storeInfo 
         totalSosisKeju += (item.sosis_keju || 0);
         totalRte += (item.total_rte || 0);
     });
+    return { totalSpd, totalMpp, totalNbh, totalYccg, totalSosisOri, totalSosisKeju, totalRte };
+}
+
+export function getStructuredTextRekap(dataList, targetSPD = 4725000, storeInfo = null) {
+    if (!dataList || dataList.length === 0) {
+        return "⚠️ Belum ada data laporan yang tersimpan untuk direkap bulan ini.";
+    }
+
+    const namaToko = storeInfo?.nama_toko || storeInfo?.nama || 'OMI TITAN EKSEKUTIF MART';
+    const kodeToko = storeInfo?.kode_toko || storeInfo?.kode || 'O8BM';
+
+    const { totalSpd, totalMpp, totalNbh, totalYccg, totalSosisOri, totalSosisKeju, totalRte } = aggregateRekapData(dataList);
+    const jumlahHari = dataList.length;
 
     const targetSpdSafe = getSafeTargetSPD(targetSPD);
     const rataSpd = jumlahHari > 0 ? Math.round(totalSpd / jumlahHari) : 0;
@@ -175,24 +171,8 @@ export function generateRekapExcel(dataList, outputPath = 'Rekap_Bulanan.xlsx', 
     xlsx.utils.book_append_sheet(wb, wsHarian, 'Data Penjualan Harian');
 
     // 2. SHEET 2: RINGKASAN PERFORMA BULANAN
-    let totalSpd = 0;
-    let totalMpp = 0;
-    let totalNbh = 0;
-    let totalYccg = 0;
-    let totalSosisOri = 0;
-    let totalSosisKeju = 0;
-    let totalRte = 0;
+    const { totalSpd, totalMpp, totalNbh, totalYccg, totalSosisOri, totalSosisKeju, totalRte } = aggregateRekapData(dataList);
     const jumlahHari = dataList.length;
-
-    dataList.forEach(item => {
-        totalSpd += (item.spd || 0);
-        totalMpp += (item.mpp || 0);
-        totalNbh += (item.nbh || 0);
-        totalYccg += (item.yccg || 0);
-        totalSosisOri += (item.sosis_ori || 0);
-        totalSosisKeju += (item.sosis_keju || 0);
-        totalRte += (item.total_rte || 0);
-    });
 
     const rataSpd = jumlahHari > 0 ? Math.round(totalSpd / jumlahHari) : 0;
     const rawAchMtd = targetSpdSafe > 0 ? ((rataSpd / targetSpdSafe) * 100) : 0;

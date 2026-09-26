@@ -2,6 +2,7 @@ import xlsx from 'xlsx';
 import ExcelJS from 'exceljs';
 import fs from 'fs';
 import path from 'path';
+import { loadConfig } from './config_helper.js';
 
 /**
  * Parsing angka aman yang menangani locale Indonesia (koma sebagai desimal)
@@ -203,9 +204,10 @@ export function analyzePareto(filePath, maxStockThreshold = 10) {
 export async function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_Pareto.xlsx', storeInfo = null) {
     const { lowStockItems, totalItem, totalKritis, totalKosong, totalSangatKritis, totalMenipis, maxStockThreshold = 10, fileName } = analysisResult;
 
-    const namaToko = storeInfo?.nama_toko || storeInfo?.nama || 'OMI TITAN EKSEKUTIF MART';
-    const kodeToko = storeInfo?.kode_toko || storeInfo?.kode || 'O8BM';
-    const cabangToko = storeInfo?.cabang ? ` - CABANG ${storeInfo.cabang}` : ' - CABANG BEKASI';
+    const cfg = loadConfig();
+    const namaToko = storeInfo?.nama_toko || storeInfo?.nama || cfg.nama_toko;
+    const kodeToko = storeInfo?.kode_toko || storeInfo?.kode || cfg.kode_toko;
+    const cabangToko = storeInfo?.cabang ? ` - CABANG ${storeInfo.cabang}` : (cfg.cabang ? ` - CABANG ${cfg.cabang}` : ' - CABANG BEKASI');
 
     const wb = new ExcelJS.Workbook();
     wb.creator = `Bot Laporan ${namaToko}`;
@@ -439,8 +441,9 @@ export async function generatePbExcel(analysisResult, outputPath = 'Laporan_PB_P
  */
 export function getPbSummaryText(analysisResult, limit = 10, storeInfo = null) {
     const { lowStockItems, totalKritis, totalKosong, totalSangatKritis, totalMenipis, maxStockThreshold = 10, fileName } = analysisResult;
-    const namaToko = storeInfo?.nama_toko || storeInfo?.nama || 'OMI TITAN EKSEKUTIF MART';
-    const kodeToko = storeInfo?.kode_toko || storeInfo?.kode || 'O8BM';
+    const cfg = loadConfig();
+    const namaToko = storeInfo?.nama_toko || storeInfo?.nama || cfg.nama_toko;
+    const kodeToko = storeInfo?.kode_toko || storeInfo?.kode || cfg.kode_toko;
 
     let text = `📦 *ANALISA STOK PARETO & REKOMENDASI PB*\n`;
     text += `${namaToko} (${kodeToko})\n`;

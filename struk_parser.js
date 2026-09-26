@@ -1,16 +1,8 @@
 import fs from 'fs';
 import path from 'path';
+import { formatRp, parseNominal } from './src/formatters.js';
+export { parseNominal };
 
-/**
- * Membersihkan format string nominal angka (misal '1.054.550' -> 1054550)
- */
-export function parseNominal(str) {
-    if (str === undefined || str === null) return 0;
-    const clean = String(str).replace(/[^0-9]/g, '');
-    return clean ? parseInt(clean, 10) : 0;
-}
-
-const formatRp = (angka) => new Intl.NumberFormat('id-ID').format(Math.round(angka) || 0);
 
 /**
  * Mem-parse isi file jurnal kasir POS OMI (misal 02-20260926.TXT)

@@ -129,12 +129,7 @@ export function isAllowed(jid) {
     );
 }
 
-/**
- * Kompatibilitas mundur: isAdmin diarahkan ke isSuperAdmin untuk aksi sensitif
- */
-export function isAdmin(jid) {
-    return isSuperAdmin(jid);
-}
+
 
 /**
  * Tambah Admin Biasa (Karyawan Toko / Kasir / Kepala Toko)

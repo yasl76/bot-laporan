@@ -30,7 +30,7 @@
 import fs from 'fs';
 import path from 'path';
 import { formatMonthYearIndo, formatDateFileName } from './formatters.js';
-import { loadConfig } from '../config_helper.js';
+import { loadConfig, getStoreInfo } from '../config_helper.js';
 import { loadWhitelist, normalizeNumber } from '../whitelist_helper.js';
 import { generateRekapExcel } from '../rekap_helper.js';
 
@@ -201,11 +201,7 @@ export async function runSchedulerTick(sock, now = new Date(), options = {}) {
                     let outPath = null;
                     try {
                         outPath = path.resolve(process.cwd(), `Rekap_Bulanan_Otomatis_${monthKey}.xlsx`);
-                        const storeInfo = {
-                            nama_toko: cfg.nama_toko,
-                            kode_toko: cfg.kode_toko,
-                            cabang: cfg.cabang
-                        };
+                        const storeInfo = getStoreInfo(cfg);
                         generateRekapExcel(list, outPath, cfg.target_spd, storeInfo);
 
                         const superAdminRecipients = new Set();
