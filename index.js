@@ -8,6 +8,7 @@ import { isAllowed, isSuperAdmin, isAdmin, addNumber, removeNumber, listNumbers,
 import { getLatestParetoFile, analyzePareto, generatePbExcel, getPbSummaryText } from './pareto_analyzer.js';
 import { getStructuredTextRekap, generateRekapExcel } from './rekap_helper.js';
 import { loadConfig, updateConfig, getConfigSummary } from './config_helper.js';
+import { parsePosJournal, formatPosAuditMessage } from './struk_parser.js';
 
 function parseNominal(val) {
     if (val === undefined || val === null) return 0;
@@ -246,6 +247,49 @@ async function startBot() {
                     await sock.sendMessage(sender, { text: `❌ Terjadi kesalahan saat memproses file pareto: ${err.message}` });
                     return;
                 }
+            }
+
+            // ─── PENANGANAN UPLOAD LOG JURNAL KASIR POS (.TXT) UNTUK AUDIT PRA-CLOSING ───
+            if (fileName.endsWith('.txt')) {
+                if (!isSenderAllowed) {
+                    const wl = loadWhitelist();
+                    await sock.sendMessage(sender, {
+                        text: `⚠️ Maaf, nomor Anda (*${normSender}*) belum terdaftar untuk mengupload log ke bot.\nSilakan hubungi Super Admin (${wl.super_admins?.[0] || wl.admin}).`
+                    });
+                    return;
+                }
+
+                let tempTxtPath = null;
+                try {
+                    await sock.sendMessage(sender, {
+                        text: `⏳ Mengunduh dan menganalisa log jurnal kasir *${doc.fileName}*...`
+                    });
+
+                    const buffer = await downloadMediaMessage(m, 'buffer', {});
+                    tempTxtPath = `pos_uploaded_${Date.now()}.txt`;
+                    fs.writeFileSync(tempTxtPath, buffer);
+
+                    const contentStr = buffer.toString('latin1');
+                    if (contentStr.includes('INISIALISASI') || contentStr.includes('TITAN EKSEKUTIF MART') || contentStr.includes('Station :')) {
+                        const auditResult = parsePosJournal(tempTxtPath);
+                        const auditMsg = formatPosAuditMessage(auditResult);
+                        await sock.sendMessage(sender, { text: auditMsg });
+                    } else {
+                        await sock.sendMessage(sender, {
+                            text: `⚠️ File *${doc.fileName}* bukan format log jurnal kasir POS OMI (tidak ditemukan blok INISIALISASI).`
+                        });
+                    }
+                } catch (err) {
+                    console.error('Error memproses log jurnal kasir:', err);
+                    await sock.sendMessage(sender, {
+                        text: `❌ Gagal memproses file log kasir *${doc.fileName}*: ${err.message}`
+                    });
+                } finally {
+                    if (tempTxtPath) {
+                        try { fs.unlinkSync(tempTxtPath); } catch (_) {}
+                    }
+                }
+                return;
             }
         }
 
@@ -631,7 +675,7 @@ async function startBot() {
         // ============================================================
         // 3. PEMERIKSAAN HAK AKSES WHITELIST UNTUK FITUR OPERASIONAL
         // ============================================================
-        const botCommands = ['menu', 'lapor', '!menu', '!kirimlaporan', '!rekap', 'rekap', '!pb', 'pb', '!hapusdata'];
+        const botCommands = ['menu', 'lapor', '!menu', '!kirimlaporan', '!rekap', 'rekap', '!pb', 'pb', '!hapusdata', '!auditkas', '!cekshift'];
         const isBotCommand = botCommands.some(cmd => lowerText.startsWith(cmd));
 
         if (isBotCommand && !isSenderAllowed) {
@@ -670,6 +714,8 @@ Total MPP:
 Total NBH: 
 
 💡 *Fitur & Perintah Operasional:*
+- *!auditkas* : Audit pra-closing kasir (Cash, E-Money, EDC & Uang Laci hari ini)
+- *Upload File Kasir (.TXT)* : Otomatis audit rekonsiliasi kas shift berjalan
 - *!rekap* : Ringkasan performa penjualan & SO bulan ini
 - *!rekap excel* : Unduh file Excel rekapitulasi harian lengkap
 - *!pb* : Analisa ringkasan stok pareto kritis (default <= ${cfg.ambang_stok_pb} pcs)
@@ -693,6 +739,48 @@ Total NBH:
             }
 
             await sock.sendMessage(sender, { text: templatePesan });
+            return;
+        }
+
+        // ============================================================
+        // 4.1 FITUR AUDIT PRA-CLOSING KASIR POS (!auditkas / !cekshift)
+        // ============================================================
+        if (lowerText === '!auditkas' || lowerText === '!cekshift') {
+            const struckDir = path.resolve('struck');
+            if (!fs.existsSync(struckDir)) {
+                await sock.sendMessage(sender, {
+                    text: '⚠️ Folder log jurnal POS (*struck*) belum ditemukan di server.\nSilakan langsung kirimkan/upload file *02-YYYYMMDD.TXT* kasir ke chat ini.'
+                });
+                return;
+            }
+
+            // Cari file jurnal .TXT terbaru
+            const txtFiles = fs.readdirSync(struckDir)
+                .filter(f => f.toLowerCase().endsWith('.txt') && !f.startsWith('~$'))
+                .map(f => ({ name: f, fullPath: path.join(struckDir, f), mtime: fs.statSync(path.join(struckDir, f)).mtime }))
+                .sort((a, b) => b.mtime - a.mtime);
+
+            if (txtFiles.length === 0) {
+                await sock.sendMessage(sender, {
+                    text: '⚠️ Belum ada file log kasir (.TXT) di folder struck.\nSilakan langsung kirimkan file *02-YYYYMMDD.TXT* kasir Anda ke chat ini.'
+                });
+                return;
+            }
+
+            try {
+                const latestTxt = txtFiles[0].fullPath;
+                await sock.sendMessage(sender, {
+                    text: `⏳ Memproses audit pra-closing dari log kasir terbaru (*${txtFiles[0].name}*)...`
+                });
+                const auditResult = parsePosJournal(latestTxt);
+                const auditMsg = formatPosAuditMessage(auditResult);
+                await sock.sendMessage(sender, { text: auditMsg });
+            } catch (err) {
+                console.error('Error saat !auditkas:', err);
+                await sock.sendMessage(sender, {
+                    text: `❌ Terjadi kesalahan saat audit kas: ${err.message}`
+                });
+            }
             return;
         }
 
