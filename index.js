@@ -10,6 +10,23 @@ import { getStructuredTextRekap, generateRekapExcel } from './rekap_helper.js';
 import { loadConfig, updateConfig, getConfigSummary } from './config_helper.js';
 import { parsePosJournal, formatPosAuditMessage } from './struk_parser.js';
 
+// Filter error desinkronisasi internal libsignal/Baileys agar tidak mengotori file log stderr PM2
+const _origConsoleError = console.error;
+console.error = function (...args) {
+    const text = args.map(a => (a && a.stack) ? a.stack : String(a)).join(' ');
+    if (
+        text.includes('SessionError') ||
+        text.includes('Over 2000 messages') ||
+        text.includes('Failed to decrypt message with any known session') ||
+        text.includes('Session error:SessionError') ||
+        text.includes('Decrypted message with closed session') ||
+        text.includes('No matching sessions found')
+    ) {
+        return; // Filter desinkronisasi ratchet internal Baileys
+    }
+    _origConsoleError.apply(console, args);
+};
+
 function parseNominal(val) {
     if (val === undefined || val === null) return 0;
     const clean = String(val).replace(/[^0-9]/g, '');
