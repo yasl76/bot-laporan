@@ -15,14 +15,18 @@ const _origConsoleError = console.error;
 console.error = function (...args) {
     const text = args.map(a => (a && a.stack) ? a.stack : String(a)).join(' ');
     if (
+        text.includes('Session error:') ||
         text.includes('SessionError') ||
+        text.includes('Bad MAC') ||
+        text.includes('verifyMAC') ||
         text.includes('Over 2000 messages') ||
         text.includes('Failed to decrypt message with any known session') ||
-        text.includes('Session error:SessionError') ||
         text.includes('Decrypted message with closed session') ||
-        text.includes('No matching sessions found')
+        text.includes('No matching sessions found') ||
+        text.includes('Key used already or never filled') ||
+        text.includes('Chain closed')
     ) {
-        return; // Filter desinkronisasi ratchet internal Baileys
+        return; // Filter desinkronisasi ratchet internal Baileys/libsignal
     }
     _origConsoleError.apply(console, args);
 };
@@ -43,22 +47,27 @@ const pendingParetoUploads = new Map();
 async function startBot() {
     console.log('⏳ Memulai program bot laporan & analisa pareto toko...');
 
-    // ─── AUTO-CLEANUP SESI LAMA ─────────────────────────────────────────────
-    // Hapus file session-*.json yang lebih dari 7 hari agar tidak menumpuk
+    // ─── AUTO-CLEANUP SESI LAMA & DESINKRON ────────────────────────────────
+    // Hapus file session-*.json & sender-key-*.json yang lebih dari 2 hari atau desinkron
+    // PENTING: creds.json, pre-key-*.json, dan app-state-sync-* TIDAK BOLEH dihapus!
     try {
         const sesiDir = path.resolve('sesi_bot');
         if (fs.existsSync(sesiDir)) {
             const now = Date.now();
-            const TUJUH_HARI_MS = 7 * 24 * 60 * 60 * 1000;
+            const DUA_HARI_MS = 2 * 24 * 60 * 60 * 1000;
             let cleaned = 0;
             const files = fs.readdirSync(sesiDir);
             for (const file of files) {
-                if (!file.startsWith('session-')) continue;
+                const isSessionFile = file.startsWith('session-') || 
+                                      file.startsWith('sender-key-') || 
+                                      file.startsWith('sender-key-memory-');
+                if (!isSessionFile) continue;
+
                 const filePath = path.join(sesiDir, file);
                 try {
                     const stat = fs.statSync(filePath);
                     // Hapus jika lebih dari 2 hari atau file session yang desinkronisasi
-                    if (now - stat.mtimeMs > 2 * 24 * 60 * 60 * 1000 || file.includes('39995440156688')) {
+                    if (now - stat.mtimeMs > DUA_HARI_MS || file.includes('39995440156688')) {
                         fs.unlinkSync(filePath);
                         cleaned++;
                     }
@@ -1266,7 +1275,14 @@ function setupScheduler(sock) {
 // Filter error desinkronisasi libsignal agar tidak memenuhi log stderr PM2
 process.on('unhandledRejection', (reason) => {
     const msg = String(reason?.message || reason || '');
-    if (msg.includes('SessionError') || msg.includes('Over 2000 messages') || msg.includes('closed session') || msg.includes('decrypt message')) {
+    if (
+        msg.includes('SessionError') ||
+        msg.includes('Over 2000 messages') ||
+        msg.includes('closed session') ||
+        msg.includes('decrypt message') ||
+        msg.includes('Bad MAC') ||
+        msg.includes('verifyMAC')
+    ) {
         return;
     }
     console.error('Unhandled Rejection:', reason);
@@ -1274,7 +1290,14 @@ process.on('unhandledRejection', (reason) => {
 
 process.on('uncaughtException', (err) => {
     const msg = String(err?.message || err || '');
-    if (msg.includes('SessionError') || msg.includes('Over 2000 messages') || msg.includes('closed session') || msg.includes('decrypt message')) {
+    if (
+        msg.includes('SessionError') ||
+        msg.includes('Over 2000 messages') ||
+        msg.includes('closed session') ||
+        msg.includes('decrypt message') ||
+        msg.includes('Bad MAC') ||
+        msg.includes('verifyMAC')
+    ) {
         return;
     }
     console.error('Uncaught Exception:', err);
