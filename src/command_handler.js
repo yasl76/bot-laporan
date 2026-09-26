@@ -17,6 +17,7 @@ import {
     saveWhitelist,
     linkLid
 } from '../whitelist_helper.js';
+import {
     loadConfig,
     updateConfig,
     getConfigSummary,
