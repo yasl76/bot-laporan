@@ -8,7 +8,7 @@ import { isAllowed, isSuperAdmin, isAdmin, addNumber, removeNumber, listNumbers,
 import { getLatestParetoFile, analyzePareto, generatePbExcel, getPbSummaryText } from './pareto_analyzer.js';
 import { getStructuredTextRekap, generateRekapExcel } from './rekap_helper.js';
 import { loadConfig, updateConfig, getConfigSummary } from './config_helper.js';
-import { parsePosJournal, formatPosAuditMessage } from './struk_parser.js';
+import { parsePosJournal, formatPosAuditMessage, getActiveOrLatestShift, calculateVariance, formatVarianceMessage } from './struk_parser.js';
 
 // Filter error desinkronisasi internal libsignal/Baileys agar tidak mengotori file log stderr PM2
 const _origConsoleError = console.error;
@@ -43,6 +43,11 @@ const formatRp = (angka) => new Intl.NumberFormat('id-ID').format(Math.round(ang
 // Key: normalized sender number
 // Value: { filePath, fileName, timestamp }
 const pendingParetoUploads = new Map();
+
+// Map untuk alur konfirmasi interaktif input kas fisik / variance:
+// Key: normalized sender number
+// Value: { targetFisikLaci, shiftNum, kasirName, kasirId, tanggal, station, timestamp }
+const pendingCashAudits = new Map();
 
 async function startBot() {
     console.log('⏳ Memulai program bot laporan & analisa pareto toko...');
@@ -304,6 +309,26 @@ async function startBot() {
                         const auditResult = parsePosJournal(tempTxtPath);
                         const auditMsg = formatPosAuditMessage(auditResult);
                         await sock.sendMessage(sender, { text: auditMsg });
+
+                        const targetShift = getActiveOrLatestShift(auditResult);
+                        if (targetShift) {
+                            pendingCashAudits.set(normSender, {
+                                targetFisikLaci: targetShift.totalFisikLaci,
+                                shiftNum: targetShift.shiftNum,
+                                kasirName: targetShift.kasirName,
+                                kasirId: targetShift.kasirId,
+                                tanggal: auditResult.tanggal,
+                                station: auditResult.station,
+                                timestamp: Date.now()
+                            });
+
+                            await sock.sendMessage(sender, {
+                                text: `💵 *Cek Variance Kas Laci (Shift ${targetShift.shiftNum} - ${targetShift.kasirName}):*\n` +
+                                      `Target kas sistem saat ini: *Rp ${formatRp(targetShift.totalFisikLaci)}*\n\n` +
+                                      `👉 Balas pesan ini dengan *nominal uang fisik di laci Anda saat ini* (misal: 1545000), atau ketik *batal*.\n` +
+                                      `_(Batas waktu 5 menit)_`
+                            });
+                        }
                     } else {
                         await sock.sendMessage(sender, {
                             text: `⚠️ File *${doc.fileName}* bukan format log jurnal kasir POS OMI (tidak ditemukan blok INISIALISASI).`
@@ -387,6 +412,48 @@ async function startBot() {
                 } else {
                     await sock.sendMessage(sender, {
                         text: `⚠️ Mohon ketik angka ambang batas stok (misal: *10*, *5*, *15*), atau ketik *batal* untuk membatalkan analisa file *${pending.fileName}*.`
+                    });
+                    return;
+                }
+            }
+        }
+
+        // ============================================================
+        // 1.2 RESPONS ALUR KONFIRMASI INTERAKTIF VARIANCE KAS
+        // ============================================================
+        if (pendingCashAudits.has(normSender)) {
+            const auditSession = pendingCashAudits.get(normSender);
+
+            // Timeout 5 menit
+            if (Date.now() - auditSession.timestamp > 5 * 60 * 1000) {
+                pendingCashAudits.delete(normSender);
+            } else if (lowerText === 'batal') {
+                pendingCashAudits.delete(normSender);
+                await sock.sendMessage(sender, { text: `❌ Pengecekan variance kas Shift ${auditSession.shiftNum} dibatalkan.` });
+                return;
+            } else if (lowerText.startsWith('!') || ['menu', 'lapor', 'rekap', 'pb', 'auditkas'].includes(lowerText)) {
+                // Jika user mengetik perintah lain, batalkan sesi audit kas agar tidak tersangkut
+                pendingCashAudits.delete(normSender);
+            } else {
+                const nominalFisik = parseNominal(cleanText);
+                if (nominalFisik > 0) {
+                    pendingCashAudits.delete(normSender);
+                    const varianceMsg = formatVarianceMessage({
+                        shift: {
+                            shiftNum: auditSession.shiftNum,
+                            kasirName: auditSession.kasirName,
+                            kasirId: auditSession.kasirId,
+                            totalFisikLaci: auditSession.targetFisikLaci
+                        },
+                        kasFisikAktual: nominalFisik,
+                        tanggal: auditSession.tanggal,
+                        station: auditSession.station
+                    });
+                    await sock.sendMessage(sender, { text: varianceMsg });
+                    return;
+                } else {
+                    await sock.sendMessage(sender, {
+                        text: `⚠️ Masukkan nominal uang fisik laci Anda saat ini (misal: *1545000*), atau ketik *batal* untuk keluar.`
                     });
                     return;
                 }
@@ -805,6 +872,26 @@ Total NBH:
                 const auditResult = parsePosJournal(latestTxt);
                 const auditMsg = formatPosAuditMessage(auditResult);
                 await sock.sendMessage(sender, { text: auditMsg });
+
+                const targetShift = getActiveOrLatestShift(auditResult);
+                if (targetShift) {
+                    pendingCashAudits.set(normSender, {
+                        targetFisikLaci: targetShift.totalFisikLaci,
+                        shiftNum: targetShift.shiftNum,
+                        kasirName: targetShift.kasirName,
+                        kasirId: targetShift.kasirId,
+                        tanggal: auditResult.tanggal,
+                        station: auditResult.station,
+                        timestamp: Date.now()
+                    });
+
+                    await sock.sendMessage(sender, {
+                        text: `💵 *Cek Variance Kas Laci (Shift ${targetShift.shiftNum} - ${targetShift.kasirName}):*\n` +
+                              `Target kas sistem saat ini: *Rp ${formatRp(targetShift.totalFisikLaci)}*\n\n` +
+                              `👉 Balas pesan ini dengan *nominal uang fisik di laci Anda saat ini* (misal: 1545000), atau ketik *batal*.\n` +
+                              `_(Batas waktu 5 menit)_`
+                    });
+                }
             } catch (err) {
                 console.error('Error saat !auditkas:', err);
                 await sock.sendMessage(sender, {

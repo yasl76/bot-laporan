@@ -245,3 +245,72 @@ export function formatPosAuditMessage(auditResult) {
     text += `💡 _Kirim file .TXT terbaru kapan saja untuk cek rekonsiliasi kas secara realtime._`;
     return text;
 }
+
+/**
+ * Mengambil shift yang sedang aktif (live); jika tidak ada, ambil shift terakhir
+ * @param {object} auditResult - Objek hasil parsePosJournal
+ * @returns {object|null} Shift yang ditargetkan
+ */
+export function getActiveOrLatestShift(auditResult) {
+    if (!auditResult || !auditResult.shifts || auditResult.shifts.length === 0) {
+        return null;
+    }
+    // Cari shift aktif
+    const activeShift = auditResult.shifts.find(s => !s.isClosed || s.status === 'ACTIVE');
+    if (activeShift) {
+        return activeShift;
+    }
+    // Jika semua sudah closing, ambil shift paling akhir
+    return auditResult.shifts[auditResult.shifts.length - 1];
+}
+
+/**
+ * Menghitung selisih (variance) antara fisik kas aktual dan target sistem
+ * @param {number} targetFisikLaci - Target kas menurut sistem POS
+ * @param {number} kasFisikAktual - Nominal uang fisik dihitung kasir
+ * @returns {object} { selisih, status, formattedVariance }
+ */
+export function calculateVariance(targetFisikLaci, kasFisikAktual) {
+    const selisih = (kasFisikAktual || 0) - (targetFisikLaci || 0);
+    let status = 'PAS';
+    let formattedVariance = 'Rp 0 (Pas / Balance)';
+
+    if (selisih > 0) {
+        status = 'LEBIH';
+        formattedVariance = `+Rp ${formatRp(selisih)} (Lebih)`;
+    } else if (selisih < 0) {
+        status = 'KURANG';
+        formattedVariance = `-Rp ${formatRp(Math.abs(selisih))} (Kurang)`;
+    }
+
+    return {
+        targetFisikLaci,
+        kasFisikAktual,
+        selisih,
+        status,
+        formattedVariance
+    };
+}
+
+/**
+ * Memformat pesan ringkas hasil audit variance kas laci
+ * @param {object} params - { shift, kasFisikAktual, tanggal, station }
+ * @returns {string} Pesan teks WhatsApp
+ */
+export function formatVarianceMessage({ shift, kasFisikAktual, tanggal, station }) {
+    const targetFisikLaci = shift.totalFisikLaci !== undefined ? shift.totalFisikLaci : (shift.cashAwal + shift.tunaiNet);
+    const variance = calculateVariance(targetFisikLaci, kasFisikAktual);
+
+    let text = `🧾 *HASIL REKONSILIASI VARIANCE KAS*\n`;
+    text += `OMI TITAN EKSEKUTIF MART (Station ${station || '02'})\n`;
+    text += `👤 Shift       : *Shift ${shift.shiftNum}* (${shift.kasirName})\n`;
+    text += `📅 Tanggal     : *${tanggal || 'Hari Ini'}*\n`;
+    text += `----------------------------------------\n`;
+    text += `• Target Kas Sistem : Rp ${formatRp(targetFisikLaci)}\n`;
+    text += `• Kas Fisik Laci    : Rp ${formatRp(kasFisikAktual)}\n`;
+    text += `• Variance (Selisih): *${variance.formattedVariance}*\n`;
+    text += `----------------------------------------`;
+
+    return text;
+}
+
