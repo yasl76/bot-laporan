@@ -545,7 +545,7 @@ Sistem bot ini mengandalkan 3 file JSON utama di root folder. Pahami peran masin
      ```json
      {
        "admin": "6285852559058",
-       "super_admins": ["6285852559058", "6285123338591"],
+       "super_admins": ["6285852559058", "168779396993221"],
        "users": [
          { "number": "6285852559058", "name": "Super Admin Utama", "role": "super_admin" },
          { "number": "6281234567890", "name": "Kasir Pagi", "role": "admin_biasa", "lid": "215633832722432" }

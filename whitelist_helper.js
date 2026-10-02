@@ -3,7 +3,6 @@ import fs from 'fs';
 const WHITELIST_FILE = 'whitelist.json';
 export const DEFAULT_SUPER_ADMINS = [
     '6285852559058',
-    '6285123338591',
     '168779396993221'
 ];
 
@@ -29,12 +28,11 @@ export function loadWhitelist() {
         if (!fs.existsSync(WHITELIST_FILE)) {
             const initial = {
                 admin: DEFAULT_SUPER_ADMINS[0],
-                admin_secondary: DEFAULT_SUPER_ADMINS[1],
-                admin_lid: DEFAULT_SUPER_ADMINS[2],
+                admin_secondary: null,
+                admin_lid: DEFAULT_SUPER_ADMINS[1],
                 super_admins: [...DEFAULT_SUPER_ADMINS],
                 users: [
-                    { number: DEFAULT_SUPER_ADMINS[0], lid: DEFAULT_SUPER_ADMINS[2], name: 'Super Admin Utama', role: 'super_admin' },
-                    { number: DEFAULT_SUPER_ADMINS[1], name: 'Super Admin Cadangan', role: 'super_admin' }
+                    { number: DEFAULT_SUPER_ADMINS[0], lid: DEFAULT_SUPER_ADMINS[1], name: 'Super Admin Utama', role: 'super_admin' }
                 ]
             };
             fs.writeFileSync(WHITELIST_FILE, JSON.stringify(initial, null, 2));
@@ -45,8 +43,11 @@ export function loadWhitelist() {
         if (!data.super_admins || !Array.isArray(data.super_admins)) {
             data.super_admins = [...DEFAULT_SUPER_ADMINS];
         } else {
-            // Hapus LID Raffi jika sempat masuk ke super_admins
-            data.super_admins = data.super_admins.filter(sa => normalizeNumber(sa) !== '215633832722432');
+            // Hapus LID Raffi jika sempat masuk ke super_admins dan hapus mantan super admin 6285123338591
+            data.super_admins = data.super_admins.filter(sa => {
+                const norm = normalizeNumber(sa);
+                return norm !== '215633832722432' && norm !== '6285123338591';
+            });
             // Pastikan semua default super admin tetap ada
             for (const sa of DEFAULT_SUPER_ADMINS) {
                 if (!data.super_admins.includes(sa)) {
@@ -55,8 +56,21 @@ export function loadWhitelist() {
             }
         }
 
+        if (data.admin_secondary && normalizeNumber(data.admin_secondary) === '6285123338591') {
+            data.admin_secondary = null;
+        }
+
         if (!data.users || !Array.isArray(data.users)) {
             data.users = [];
+        } else {
+            // Hapus mantan super admin cadangan 6285123338591 dari users jika masih ada
+            data.users = data.users.filter(u => normalizeNumber(u.number) !== '6285123338591');
+        }
+
+        // Pastikan Super Admin Utama memiliki link ke admin_lid jika belum ada
+        const saUtama = data.users.find(u => normalizeNumber(u.number) === DEFAULT_SUPER_ADMINS[0]);
+        if (saUtama && !saUtama.lid) {
+            saUtama.lid = DEFAULT_SUPER_ADMINS[1];
         }
 
         // Pastikan Super Admin terdaftar di users dengan role super_admin
@@ -75,12 +89,11 @@ export function loadWhitelist() {
         console.error('Error membaca whitelist:', e);
         return {
             admin: DEFAULT_SUPER_ADMINS[0],
-            admin_secondary: DEFAULT_SUPER_ADMINS[1],
-            admin_lid: DEFAULT_SUPER_ADMINS[2],
+            admin_secondary: null,
+            admin_lid: DEFAULT_SUPER_ADMINS[1],
             super_admins: [...DEFAULT_SUPER_ADMINS],
             users: [
-                { number: DEFAULT_SUPER_ADMINS[0], lid: DEFAULT_SUPER_ADMINS[2], name: 'Super Admin Utama', role: 'super_admin' },
-                { number: DEFAULT_SUPER_ADMINS[1], name: 'Super Admin Cadangan', role: 'super_admin' }
+                { number: DEFAULT_SUPER_ADMINS[0], lid: DEFAULT_SUPER_ADMINS[1], name: 'Super Admin Utama', role: 'super_admin' }
             ]
         };
     }

@@ -35,12 +35,12 @@ export async function runTests() {
         // Setup clean whitelist
         const initialWl = {
             admin: '6285852559058',
-            admin_secondary: '6285123338591',
+            admin_secondary: null,
             admin_lid: '168779396993221',
-            super_admins: ['6285852559058', '6285123338591', '168779396993221'],
+            super_admins: ['6285852559058', '168779396993221'],
             users: [
                 { number: '6285852559058', lid: '168779396993221', name: 'Super Admin Utama', role: 'super_admin' },
-                { number: '6285123338591', name: 'Super Admin Cadangan', role: 'super_admin' },
+                { number: '6281234567890', name: 'Staf Kasir', role: 'admin_biasa' },
                 { number: '6282264017152', lid: '215633832722432', name: 'raffi', role: 'admin_biasa' }
             ]
         };
@@ -48,10 +48,10 @@ export async function runTests() {
 
         // Test 21.1: linkLid links WhatsApp LID to registered user phone
         {
-            const resValid = linkLid('085123338591', '998877665544');
+            const resValid = linkLid('081234567890', '998877665544');
             assert.strictEqual(resValid.success, true);
             const wl = loadWhitelist();
-            const updated = wl.users.find(u => u.number === '6285123338591');
+            const updated = wl.users.find(u => u.number === '6281234567890');
             assert.strictEqual(updated.lid, '998877665544');
 
             // linkLid rejects non-existent user
@@ -96,15 +96,17 @@ export async function runTests() {
             console.log('  ✔ Case 21.2: resolveReplyJid preserves original sender JID for both @lid and @s.whatsapp.net');
         }
 
-        // Test 21.3: Super Admin vs Regular Admin privilege boundaries (Raffi isolation)
+        // Test 21.3: Super Admin vs Regular Admin privilege boundaries (Raffi isolation & sole Super Admin)
         {
-            // DEFAULT_SUPER_ADMINS must NOT contain Raffi's LID (215633832722432)
+            // DEFAULT_SUPER_ADMINS must NOT contain Raffi's LID (215633832722432) or former secondary admin (6285123338591)
             assert.strictEqual(DEFAULT_SUPER_ADMINS.includes('215633832722432'), false, 'DEFAULT_SUPER_ADMINS must not contain Raffi LID');
-            assert.deepStrictEqual(DEFAULT_SUPER_ADMINS, ['6285852559058', '6285123338591', '168779396993221']);
+            assert.strictEqual(DEFAULT_SUPER_ADMINS.includes('6285123338591'), false, 'DEFAULT_SUPER_ADMINS must not contain former admin');
+            assert.deepStrictEqual(DEFAULT_SUPER_ADMINS, ['6285852559058', '168779396993221']);
 
-            // Whitelist super_admins must not contain Raffi's LID
+            // Whitelist super_admins must not contain Raffi's LID or former secondary admin
             const wl = loadWhitelist();
             assert.strictEqual(wl.super_admins.includes('215633832722432'), false, 'Whitelist super_admins must not contain Raffi LID');
+            assert.strictEqual(wl.super_admins.includes('6285123338591'), false, 'Whitelist super_admins must not contain former admin');
 
             // Raffi is regular admin, NOT super admin
             assert.strictEqual(isSuperAdmin('215633832722432@lid'), false);
@@ -115,7 +117,11 @@ export async function runTests() {
             // Bot owner is Super Admin
             assert.strictEqual(isSuperAdmin('6285852559058@s.whatsapp.net'), true);
             assert.strictEqual(isSuperAdmin('168779396993221@lid'), true);
-            console.log('  ✔ Case 21.3: Super Admin privilege boundaries correctly respect admin_biasa role & DEFAULT_SUPER_ADMINS excludes Raffi LID');
+
+            // Former secondary admin is NOT super admin and not allowed
+            assert.strictEqual(isSuperAdmin('6285123338591@s.whatsapp.net'), false);
+            assert.strictEqual(isAllowed('6285123338591@s.whatsapp.net'), false);
+            console.log('  ✔ Case 21.3: Super Admin privilege boundaries correctly respect admin_biasa role & DEFAULT_SUPER_ADMINS excludes Raffi LID and former secondary admin');
         }
 
         // Test 21.4: messageStore in-memory cache and FIFO eviction at 1500 items
@@ -204,7 +210,11 @@ export async function runTests() {
             }
             const freshWl = loadWhitelist();
             assert.strictEqual(freshWl.super_admins.includes('215633832722432'), false);
+            assert.strictEqual(freshWl.super_admins.includes('6285123338591'), false);
             assert.strictEqual(freshWl.users.some(u => u.name === 'Super Admin HP (LID)'), false);
+            assert.strictEqual(freshWl.users.some(u => u.name === 'Super Admin Cadangan'), false);
+            assert.strictEqual(freshWl.users.some(u => u.number === '6285123338591'), false);
+            assert.strictEqual(freshWl.admin_secondary, null);
             const saUtama = freshWl.users.find(u => u.number === '6285852559058');
             assert.ok(saUtama);
             assert.strictEqual(saUtama.lid, '168779396993221');

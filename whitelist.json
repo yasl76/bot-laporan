@@ -1,10 +1,9 @@
 {
   "admin": "6285852559058",
-  "admin_secondary": "6285123338591",
+  "admin_secondary": null,
   "admin_lid": "168779396993221",
   "super_admins": [
     "6285852559058",
-    "6285123338591",
     "168779396993221"
   ],
   "users": [
@@ -12,11 +11,6 @@
       "number": "6285852559058",
       "lid": "168779396993221",
       "name": "Super Admin Utama",
-      "role": "super_admin"
-    },
-    {
-      "number": "6285123338591",
-      "name": "Super Admin Cadangan",
       "role": "super_admin"
     },
     {
