@@ -94,7 +94,12 @@ export async function onIncomingMessage(sock, { messages } = {}) {
             ['menu', 'lapor', 'rekap', 'pb', 'batal'].includes(senderContext.lowerText) ||
             /^\d+$/.test(senderContext.lowerText);
         const botUserNumber = sock?.user?.id ? normalizeNumber(sock.user.id) : '';
-        const isSelfChat = normalizeNumber(senderContext.sender) === botUserNumber || senderContext.sender.endsWith('@lid');
+        const botLid = sock?.user?.lid ? normalizeNumber(sock.user.lid) : '';
+        const normRemote = normalizeNumber(senderContext.sender);
+        const isSelfChat = (botUserNumber && normRemote === botUserNumber) ||
+            (botLid && normRemote === botLid) ||
+            normRemote === '6285852559058' ||
+            normRemote === '168779396993221';
         if (!(isSelfChat && isBotCommand)) return;
     }
 

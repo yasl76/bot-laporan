@@ -297,8 +297,11 @@ export async function runTests() {
         // Case 2.6.3: Default Super Admin primary check
         assert.strictEqual(isSuperAdmin('6285852559058@s.whatsapp.net'), true);
         passedCount++;
-        // Case 2.6.4: Default Super Admin secondary LID
-        assert.strictEqual(isSuperAdmin('215633832722432@lid'), true);
+        // Case 2.6.4: Default Super Admin secondary LID (168779396993221)
+        assert.strictEqual(isSuperAdmin('168779396993221@lid'), true);
+        passedCount++;
+        // Raffi's LID must NOT be Super Admin
+        assert.strictEqual(isSuperAdmin('215633832722432@lid'), false);
         passedCount++;
         // Case 2.6.5: Empty and whitespace JID
         assert.strictEqual(isAllowed(''), false);

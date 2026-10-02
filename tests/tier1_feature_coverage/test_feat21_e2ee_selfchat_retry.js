@@ -11,7 +11,8 @@ import {
     addNumber,
     loadWhitelist,
     saveWhitelist,
-    normalizeNumber
+    normalizeNumber,
+    DEFAULT_SUPER_ADMINS
 } from '../../whitelist_helper.js';
 import { messageStore, storeMessage, cleanupOldSessions } from '../../src/connection.js';
 import { handleCommand } from '../../src/command_handler.js';
@@ -86,6 +87,14 @@ export async function runTests() {
 
         // Test 21.3: Super Admin vs Regular Admin privilege boundaries (Raffi isolation)
         {
+            // DEFAULT_SUPER_ADMINS must NOT contain Raffi's LID (215633832722432)
+            assert.strictEqual(DEFAULT_SUPER_ADMINS.includes('215633832722432'), false, 'DEFAULT_SUPER_ADMINS must not contain Raffi LID');
+            assert.deepStrictEqual(DEFAULT_SUPER_ADMINS, ['6285852559058', '6285123338591', '168779396993221']);
+
+            // Whitelist super_admins must not contain Raffi's LID
+            const wl = loadWhitelist();
+            assert.strictEqual(wl.super_admins.includes('215633832722432'), false, 'Whitelist super_admins must not contain Raffi LID');
+
             // Raffi is regular admin, NOT super admin
             assert.strictEqual(isSuperAdmin('215633832722432@lid'), false);
             assert.strictEqual(isSuperAdmin('6282264017152@s.whatsapp.net'), false);
@@ -95,7 +104,7 @@ export async function runTests() {
             // Bot owner is Super Admin
             assert.strictEqual(isSuperAdmin('6285852559058@s.whatsapp.net'), true);
             assert.strictEqual(isSuperAdmin('168779396993221@lid'), true);
-            console.log('  ✔ Case 21.3: Super Admin privilege boundaries correctly respect admin_biasa role');
+            console.log('  ✔ Case 21.3: Super Admin privilege boundaries correctly respect admin_biasa role & DEFAULT_SUPER_ADMINS excludes Raffi LID');
         }
 
         // Test 21.4: messageStore in-memory cache and FIFO eviction at 1500 items
@@ -177,7 +186,21 @@ export async function runTests() {
             console.log('  ✔ Case 21.7: storeMessage and getMessage successfully resolve encryption retry keys');
         }
 
-        return { passed: 7, failed: 0, feature: 'Feature 21 (E2EE Self-Chat & Retry Decryption)' };
+        // Test 21.8: Missing whitelist.json initializes clean default schema without duplicate LID user
+        {
+            if (fs.existsSync('whitelist.json')) {
+                fs.unlinkSync('whitelist.json');
+            }
+            const freshWl = loadWhitelist();
+            assert.strictEqual(freshWl.super_admins.includes('215633832722432'), false);
+            assert.strictEqual(freshWl.users.some(u => u.name === 'Super Admin HP (LID)'), false);
+            const saUtama = freshWl.users.find(u => u.number === '6285852559058');
+            assert.ok(saUtama);
+            assert.strictEqual(saUtama.lid, '168779396993221');
+            console.log('  ✔ Case 21.8: Missing whitelist.json initializes clean schema with merged LID and no duplicate LID user');
+        }
+
+        return { passed: 8, failed: 0, feature: 'Feature 21 (E2EE Self-Chat & Retry Decryption)' };
     } finally {
         process.chdir(origCwd);
         sandbox.cleanup();

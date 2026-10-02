@@ -3,7 +3,6 @@ import fs from 'fs';
 const WHITELIST_FILE = 'whitelist.json';
 export const DEFAULT_SUPER_ADMINS = [
     '6285852559058',
-    '215633832722432',
     '6285123338591',
     '168779396993221'
 ];
@@ -34,9 +33,8 @@ export function loadWhitelist() {
                 admin_lid: DEFAULT_SUPER_ADMINS[2],
                 super_admins: [...DEFAULT_SUPER_ADMINS],
                 users: [
-                    { number: DEFAULT_SUPER_ADMINS[0], name: 'Super Admin Utama', role: 'super_admin' },
-                    { number: DEFAULT_SUPER_ADMINS[1], name: 'Super Admin Cadangan', role: 'super_admin' },
-                    { number: DEFAULT_SUPER_ADMINS[2], name: 'Super Admin HP (LID)', role: 'super_admin' }
+                    { number: DEFAULT_SUPER_ADMINS[0], lid: DEFAULT_SUPER_ADMINS[2], name: 'Super Admin Utama', role: 'super_admin' },
+                    { number: DEFAULT_SUPER_ADMINS[1], name: 'Super Admin Cadangan', role: 'super_admin' }
                 ]
             };
             fs.writeFileSync(WHITELIST_FILE, JSON.stringify(initial, null, 2));
@@ -47,6 +45,8 @@ export function loadWhitelist() {
         if (!data.super_admins || !Array.isArray(data.super_admins)) {
             data.super_admins = [...DEFAULT_SUPER_ADMINS];
         } else {
+            // Hapus LID Raffi jika sempat masuk ke super_admins
+            data.super_admins = data.super_admins.filter(sa => normalizeNumber(sa) !== '215633832722432');
             // Pastikan semua default super admin tetap ada
             for (const sa of DEFAULT_SUPER_ADMINS) {
                 if (!data.super_admins.includes(sa)) {
@@ -79,9 +79,8 @@ export function loadWhitelist() {
             admin_lid: DEFAULT_SUPER_ADMINS[2],
             super_admins: [...DEFAULT_SUPER_ADMINS],
             users: [
-                { number: DEFAULT_SUPER_ADMINS[0], name: 'Super Admin Utama', role: 'super_admin' },
-                { number: DEFAULT_SUPER_ADMINS[1], name: 'Super Admin Cadangan', role: 'super_admin' },
-                { number: DEFAULT_SUPER_ADMINS[2], name: 'Super Admin HP (LID)', role: 'super_admin' }
+                { number: DEFAULT_SUPER_ADMINS[0], lid: DEFAULT_SUPER_ADMINS[2], name: 'Super Admin Utama', role: 'super_admin' },
+                { number: DEFAULT_SUPER_ADMINS[1], name: 'Super Admin Cadangan', role: 'super_admin' }
             ]
         };
     }
