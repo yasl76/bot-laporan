@@ -206,7 +206,7 @@ export function linkLid(phoneNumber, lid) {
  */
 export function resolveReplyJid(sock, sender, normSender) {
     if (!sender) return '';
-    return sender;
+    return typeof sender === 'string' ? sender : String(sender);
 }
 
 /**

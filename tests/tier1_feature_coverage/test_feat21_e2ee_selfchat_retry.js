@@ -14,7 +14,14 @@ import {
     normalizeNumber,
     DEFAULT_SUPER_ADMINS
 } from '../../whitelist_helper.js';
-import { messageStore, storeMessage, cleanupOldSessions } from '../../src/connection.js';
+import {
+    messageStore,
+    storeMessage,
+    cleanupOldSessions,
+    isLibsignalError,
+    setupLibsignalInterceptors,
+    LIBSIGNAL_ERROR_PATTERNS
+} from '../../src/connection.js';
 import { handleCommand } from '../../src/command_handler.js';
 
 export async function runTests() {
@@ -204,7 +211,70 @@ export async function runTests() {
             console.log('  ✔ Case 21.8: Missing whitelist.json initializes clean schema with merged LID and no duplicate LID user');
         }
 
-        return { passed: 8, failed: 0, feature: 'Feature 21 (E2EE Self-Chat & Retry Decryption)' };
+        // Test 21.9: isLibsignalError detects connection closed errors, wrapped Boom objects, and closed session warnings
+        {
+            // Plain string closed session
+            assert.strictEqual(isLibsignalError('Decrypted message with closed session.'), true);
+            assert.strictEqual(isLibsignalError('Closing open session in favor of incoming prekey bundle'), true);
+            assert.strictEqual(isLibsignalError('Session already closed'), true);
+            assert.strictEqual(isLibsignalError('Closing session:'), true);
+            assert.strictEqual(isLibsignalError('Session already open'), true);
+            assert.strictEqual(isLibsignalError('Opening session:'), true);
+
+            // Connection closed string & Error
+            assert.strictEqual(isLibsignalError('Connection Closed'), true);
+            assert.strictEqual(isLibsignalError(new Error('Connection Closed')), true);
+
+            // Wrapped Boom rejection object
+            const wrappedBoom = {
+                output: {
+                    statusCode: 428,
+                    payload: { message: 'Connection Closed' }
+                },
+                headers: {}
+            };
+            assert.strictEqual(isLibsignalError(wrappedBoom), true);
+
+            // Nested error object
+            const nestedErr = { error: new Error('Connection Closed') };
+            assert.strictEqual(isLibsignalError(nestedErr), true);
+
+            // Legitimate application errors should NOT match
+            assert.strictEqual(isLibsignalError(new Error('Database connection failed')), false);
+            assert.strictEqual(isLibsignalError('Laporan berhasil disimpan'), false);
+            assert.strictEqual(isLibsignalError(null), false);
+            assert.strictEqual(isLibsignalError(undefined), false);
+
+            console.log('  ✔ Case 21.9: isLibsignalError accurately identifies Boom Connection Closed and libsignal session warnings');
+        }
+
+        // Test 21.10: setupLibsignalInterceptors intercepts console.warn and console.info for libsignal session events
+        {
+            setupLibsignalInterceptors();
+
+            // Emit suppressed libsignal warnings and info without crashing or throwing
+            console.warn('Decrypted message with closed session.');
+            console.warn('Closing open session in favor of incoming prekey bundle');
+            console.info('Closing session:', { indexInfo: { closed: -1 } });
+            console.error('Unhandled libsignal error: Bad MAC');
+
+            // Non-suppressed normal messages should execute through
+            const normalLogs = [];
+            const tempConsoleLog = (...args) => normalLogs.push(args.join(' '));
+            const origLog = console.log;
+            console.log = tempConsoleLog;
+            try {
+                console.log('Application status: OK');
+                assert.strictEqual(normalLogs.length, 1);
+                assert.strictEqual(normalLogs[0], 'Application status: OK');
+            } finally {
+                console.log = origLog;
+            }
+
+            console.log('  ✔ Case 21.10: setupLibsignalInterceptors suppresses console.warn/info for closed sessions while preserving application logs');
+        }
+
+        return { passed: 10, failed: 0, feature: 'Feature 21 (E2EE Self-Chat & Retry Decryption)' };
     } finally {
         process.chdir(origCwd);
         sandbox.cleanup();

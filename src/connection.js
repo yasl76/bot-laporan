@@ -21,7 +21,13 @@ export const LIBSIGNAL_ERROR_PATTERNS = [
     'SessionError',
     'Closing stale open session',
     'Failed to decrypt message',
-    'Connection Closed'
+    'Connection Closed',
+    'closed session',
+    'Closing open session in favor of incoming prekey bundle',
+    'Session already closed',
+    'Closing session:',
+    'Session already open',
+    'Opening session:'
 ];
 
 export const messageStore = new Map();
@@ -49,9 +55,23 @@ export function storeMessage(msg) {
  */
 export function isLibsignalError(content) {
     if (!content) return false;
-    const str = typeof content === 'string'
-        ? content
-        : (content?.stack || content?.message || String(content));
+    let str = '';
+    if (typeof content === 'string') {
+        str = content;
+    } else {
+        const parts = [];
+        if (content.message) parts.push(content.message);
+        if (content.stack) parts.push(content.stack);
+        if (content.output?.payload?.message) parts.push(content.output.payload.message);
+        if (content.error?.message) parts.push(content.error.message);
+        if (content.error?.stack) parts.push(content.error.stack);
+        try {
+            parts.push(JSON.stringify(content));
+        } catch (_) {
+            parts.push(String(content));
+        }
+        str = parts.join(' ');
+    }
     return LIBSIGNAL_ERROR_PATTERNS.some(pattern => str.includes(pattern));
 }
 
@@ -59,7 +79,8 @@ let interceptorsInstalled = false;
 
 /**
  * Intercept internal libsignal errors (Bad MAC, Over 2000 messages, SessionError, etc.)
- * in console.error and unhandled promise rejections to prevent node process instability.
+ * in console.error, console.warn, console.info, unhandled rejections, and uncaught exceptions
+ * to prevent process instability and log pollution.
  */
 export function setupLibsignalInterceptors() {
     if (interceptorsInstalled) return;
@@ -81,17 +102,68 @@ export function setupLibsignalInterceptors() {
             return String(arg);
         }).join(' ');
 
-        if (isLibsignalError(fullText)) {
+        if (isLibsignalError(fullText) || args.some(arg => isLibsignalError(arg))) {
             return; // Suppress harmless libsignal race conditions
         }
         originalConsoleError.apply(console, args);
     };
 
+    const originalConsoleWarn = console.warn;
+    console.warn = (...args) => {
+        const fullText = args.map(arg => {
+            if (arg instanceof Error) {
+                return (arg.stack || arg.message || String(arg));
+            }
+            if (typeof arg === 'object' && arg !== null) {
+                try {
+                    return (arg.stack || arg.message || JSON.stringify(arg));
+                } catch (_) {
+                    return String(arg);
+                }
+            }
+            return String(arg);
+        }).join(' ');
+
+        if (isLibsignalError(fullText) || args.some(arg => isLibsignalError(arg))) {
+            return; // Suppress harmless libsignal closed session/prekey warnings
+        }
+        originalConsoleWarn.apply(console, args);
+    };
+
+    const originalConsoleInfo = console.info;
+    console.info = (...args) => {
+        const fullText = args.map(arg => {
+            if (arg instanceof Error) {
+                return (arg.stack || arg.message || String(arg));
+            }
+            if (typeof arg === 'object' && arg !== null) {
+                try {
+                    return (arg.stack || arg.message || JSON.stringify(arg));
+                } catch (_) {
+                    return String(arg);
+                }
+            }
+            return String(arg);
+        }).join(' ');
+
+        if (isLibsignalError(fullText) || args.some(arg => isLibsignalError(arg))) {
+            return; // Suppress verbose libsignal session state dumps
+        }
+        originalConsoleInfo.apply(console, args);
+    };
+
     process.on('unhandledRejection', (reason) => {
         if (isLibsignalError(reason)) {
-            return; // Suppress harmless libsignal race conditions
+            return; // Suppress harmless libsignal race conditions & Connection Closed
         }
         originalConsoleError('Unhandled Rejection:', reason);
+    });
+
+    process.on('uncaughtException', (err) => {
+        if (isLibsignalError(err)) {
+            return; // Suppress harmless libsignal / connection errors
+        }
+        originalConsoleError('Uncaught Exception:', err);
     });
 }
 
