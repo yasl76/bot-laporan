@@ -23,6 +23,23 @@ export const LIBSIGNAL_ERROR_PATTERNS = [
     'Failed to decrypt message'
 ];
 
+export const messageStore = new Map();
+
+/**
+ * Menyimpan pesan in-memory (FIFO limit 1500 pesan terakhir)
+ * untuk melayani permintaan retry re-enkripsi dari klien WhatsApp (E2EE handshake).
+ * @param {object} msg
+ */
+export function storeMessage(msg) {
+    if (msg?.key?.id && msg?.message) {
+        messageStore.set(msg.key.id, msg.message);
+        if (messageStore.size > 1500) {
+            const oldestKey = messageStore.keys().next().value;
+            messageStore.delete(oldestKey);
+        }
+    }
+}
+
 /**
  * Determine if an error or log message is an internal libsignal session artifact
  * that should be suppressed to avoid unhandled rejections or console noise.
@@ -78,45 +95,18 @@ export function setupLibsignalInterceptors() {
 }
 
 /**
- * Remove session-*.json files older than maxAgeDays to prevent disk bloat
+ * Remove session-*.json files older than maxAgeDays to prevent disk bloat.
+ * CATATAN PENTING: Pembersihan otomatis session-*.json dinonaktifkan karena file ini
+ * menyimpan state Double Ratchet aktif. Menghapusnya menyebabkan desync permanen
+ * ("Bad MAC" & pesan tertahan "Menunggu pesan ini..."). Sesi hanya dibersihkan jika logout.
+ *
  * @param {string} [sessionDir='sesi_bot'] - Session directory to inspect
  * @param {number} [maxAgeDays=7] - Maximum file age in days before removal
  * @returns {number} Count of deleted session files
  */
 export function cleanupOldSessions(sessionDir = 'sesi_bot', maxAgeDays = 7) {
-    try {
-        const dir = path.resolve(sessionDir);
-        if (!fs.existsSync(dir)) return 0;
-
-        const dirStat = fs.statSync(dir);
-        if (!dirStat.isDirectory()) return 0;
-
-        const now = Date.now();
-        const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
-        let cleaned = 0;
-        const files = fs.readdirSync(dir);
-
-        for (const file of files) {
-            if (!file.startsWith('session-')) continue;
-            const filePath = path.join(dir, file);
-            try {
-                const stat = fs.statSync(filePath);
-                if (stat.isFile() && (now - stat.mtimeMs > maxAgeMs)) {
-                    fs.unlinkSync(filePath);
-                    cleaned++;
-                }
-            } catch (_) {
-                // Ignore files that may already have been unlinked or locked
-            }
-        }
-        if (cleaned > 0) {
-            console.log(`🧹 Auto-cleanup: ${cleaned} file sesi lama (>${maxAgeDays} hari) berhasil dihapus.`);
-        }
-        return cleaned;
-    } catch (e) {
-        console.error('⚠️ Gagal auto-cleanup sesi:', e.message);
-        return 0;
-    }
+    // Nonaktifkan penghapusan otomatis file sesi Signal untuk menjaga integritas kunci E2EE
+    return 0;
 }
 
 /**
@@ -185,7 +175,10 @@ export async function startWhatsAppConnection({ sessionDir = 'sesi_bot', onOpen,
         auth: state,
         printQRInTerminal: false,
         browser: ['Chrome (Linux)', 'Chrome', '10.0.0'],
-        logger: pino({ level: 'silent' })
+        logger: pino({ level: 'silent' }),
+        getMessage: async (key) => {
+            return messageStore.get(key.id) || undefined;
+        }
     });
 
     sock.ev.on('creds.update', saveCreds);

@@ -15,8 +15,10 @@ import {
     normalizeNumber,
     loadWhitelist,
     saveWhitelist,
-    linkLid
+    linkLid,
+    resolveReplyJid
 } from '../whitelist_helper.js';
+import { storeMessage } from './connection.js';
 import {
     loadConfig,
     updateConfig,
@@ -99,6 +101,26 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
     const isSenderAllowed = senderContext?.isSenderAllowed !== undefined
         ? Boolean(senderContext.isSenderAllowed)
         : isAllowed(sender || normSender);
+
+    const targetSender = resolveReplyJid(sock, sender, normSender);
+
+    // Intersep sock.sendMessage untuk menormalkan JID tujuan balasan dan menyimpan pesan keluar ke messageStore
+    const originalSendMessage = sock?.sendMessage?.bind(sock);
+    if (sock && originalSendMessage) {
+        sock = new Proxy(sock, {
+            get(target, prop) {
+                if (prop === 'sendMessage') {
+                    return async (jid, content, sendOpts) => {
+                        const destJid = (jid === sender) ? targetSender : resolveReplyJid(target, jid, normalizeNumber(jid));
+                        const res = await originalSendMessage(destJid, content, sendOpts);
+                        if (res) storeMessage(res);
+                        return res;
+                    };
+                }
+                return target[prop];
+            }
+        });
+    }
 
     // ============================================================
     // 1. SUPER ADMIN COMMANDS

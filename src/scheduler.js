@@ -31,8 +31,9 @@ import fs from 'fs';
 import path from 'path';
 import { formatMonthYearIndo, formatDateFileName } from './formatters.js';
 import { loadConfig, getStoreInfo } from '../config_helper.js';
-import { loadWhitelist, normalizeNumber } from '../whitelist_helper.js';
+import { loadWhitelist, normalizeNumber, resolveReplyJid } from '../whitelist_helper.js';
 import { generateRekapExcel } from '../rekap_helper.js';
+import { storeMessage } from './connection.js';
 
 let activeInterval = null;
 
@@ -155,7 +156,7 @@ export async function runSchedulerTick(sock, now = new Date(), options = {}) {
             if (wl.users && Array.isArray(wl.users)) {
                 wl.users.forEach(u => {
                     const clean = normalizeNumber(u.number);
-                    if (clean && clean.length >= 10 && !clean.startsWith('16877')) {
+                    if (clean && clean.length >= 10) {
                         recipients.add(`${clean}@s.whatsapp.net`);
                     }
                 });
@@ -163,8 +164,8 @@ export async function runSchedulerTick(sock, now = new Date(), options = {}) {
             if (wl.super_admins && Array.isArray(wl.super_admins)) {
                 wl.super_admins.forEach(sa => {
                     const clean = normalizeNumber(sa);
-                    if (clean && clean.length >= 10 && !clean.startsWith('16877')) {
-                        recipients.add(`${clean}@s.whatsapp.net`);
+                    if (clean && clean.length >= 10) {
+                        recipients.add(resolveReplyJid(sock, `${clean}@s.whatsapp.net`, clean));
                     }
                 });
             }
@@ -172,7 +173,8 @@ export async function runSchedulerTick(sock, now = new Date(), options = {}) {
             if (sock && typeof sock.sendMessage === 'function') {
                 for (const jid of recipients) {
                     try {
-                        await sock.sendMessage(jid, { text: reminderText });
+                        const sent = await sock.sendMessage(jid, { text: reminderText });
+                        if (sent) storeMessage(sent);
                     } catch (e) {
                         console.error('Gagal mengirim reminder closing ke:', jid, e.message);
                     }
@@ -208,8 +210,8 @@ export async function runSchedulerTick(sock, now = new Date(), options = {}) {
                         if (wl.super_admins && Array.isArray(wl.super_admins)) {
                             wl.super_admins.forEach(sa => {
                                 const clean = normalizeNumber(sa);
-                                if (clean && clean.length >= 10 && !clean.startsWith('16877')) {
-                                    superAdminRecipients.add(`${clean}@s.whatsapp.net`);
+                                if (clean && clean.length >= 10) {
+                                    superAdminRecipients.add(resolveReplyJid(sock, `${clean}@s.whatsapp.net`, clean));
                                 }
                             });
                         }
@@ -219,12 +221,13 @@ export async function runSchedulerTick(sock, now = new Date(), options = {}) {
                             const sanitizedMonthName = monthName.replace(/\s+/g, '_');
                             for (const adminJid of superAdminRecipients) {
                                 try {
-                                    await sock.sendMessage(adminJid, {
+                                    const sent = await sock.sendMessage(adminJid, {
                                         document: fileBuffer,
                                         mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                                         fileName: `Rekap_Bulanan_${sanitizedMonthName}.xlsx`,
                                         caption: `📢 *REKAP OTOMATIS AKHIR BULAN TELAH SIAP!*\n\nBerikut rekapitulasi data penjualan toko ${cfg.nama_toko || 'OMI TITAN EKSEKUTIF MART'} periode *${monthName}*.\nTerima kasih atas kerja keras seluruh tim bulan ini! 🙏`
                                     });
+                                    if (sent) storeMessage(sent);
                                 } catch (e) {
                                     console.error('Gagal mengirim rekap bulanan ke super admin:', adminJid, e.message);
                                 }

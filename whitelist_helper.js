@@ -60,11 +60,12 @@ export function loadWhitelist() {
         }
 
         // Pastikan Super Admin terdaftar di users dengan role super_admin
+        // Namun hormati role jika pengguna sudah terdaftar secara eksplisit sebagai admin_biasa
         for (const sa of data.super_admins) {
-            const exists = data.users.find(u => normalizeNumber(u.number) === sa);
+            const exists = data.users.find(u => normalizeNumber(u.number) === sa || (u.lid && normalizeNumber(u.lid) === sa));
             if (!exists) {
                 data.users.push({ number: sa, name: 'Super Admin', role: 'super_admin' });
-            } else {
+            } else if (exists.role === 'super_admin') {
                 exists.role = 'super_admin';
             }
         }
@@ -74,8 +75,14 @@ export function loadWhitelist() {
         console.error('Error membaca whitelist:', e);
         return {
             admin: DEFAULT_SUPER_ADMINS[0],
+            admin_secondary: DEFAULT_SUPER_ADMINS[1],
+            admin_lid: DEFAULT_SUPER_ADMINS[2],
             super_admins: [...DEFAULT_SUPER_ADMINS],
-            users: DEFAULT_SUPER_ADMINS.map(num => ({ number: num, name: 'Super Admin', role: 'super_admin' }))
+            users: [
+                { number: DEFAULT_SUPER_ADMINS[0], name: 'Super Admin Utama', role: 'super_admin' },
+                { number: DEFAULT_SUPER_ADMINS[1], name: 'Super Admin Cadangan', role: 'super_admin' },
+                { number: DEFAULT_SUPER_ADMINS[2], name: 'Super Admin HP (LID)', role: 'super_admin' }
+            ]
         };
     }
 }
@@ -102,16 +109,24 @@ export function isSuperAdmin(jid) {
     if (!num) return false;
     const data = loadWhitelist();
 
+    // Hormati role jika user terdaftar secara eksplisit sebagai admin_biasa (misal: Raffi)
+    const user = data.users?.find(u => 
+        (normalizeNumber(u.number) === num || (u.lid && normalizeNumber(u.lid) === num))
+    );
+    if (user && user.role !== 'super_admin') {
+        return false;
+    }
+
     if (data.super_admins && data.super_admins.some(sa => normalizeNumber(sa) === num)) {
         return true;
     }
     if (num === normalizeNumber(data.admin) || (data.admin_lid && num === normalizeNumber(data.admin_lid))) {
         return true;
     }
-    return data.users.some(u => 
+    return Boolean(data.users?.some(u => 
         (normalizeNumber(u.number) === num || (u.lid && normalizeNumber(u.lid) === num)) && 
         u.role === 'super_admin'
-    );
+    ));
 }
 
 /**
@@ -140,10 +155,8 @@ export function addNumber(number, name = 'Karyawan Toko', lid = '') {
 
     const normLid = lid ? normalizeNumber(lid) : '';
     const data = loadWhitelist();
-    const existing = data.users.find(u => 
-        normalizeNumber(u.number) === norm || 
-        (normLid && u.lid && normalizeNumber(u.lid) === normLid)
-    );
+    const existing = data.users.find(u => normalizeNumber(u.number) === norm) ||
+        (normLid ? data.users.find(u => u.lid && normalizeNumber(u.lid) === normLid) : null);
     if (existing) {
         if (normLid && !existing.lid) {
             existing.lid = normLid;
@@ -166,6 +179,57 @@ export function addNumber(number, name = 'Karyawan Toko', lid = '') {
         success: true,
         message: `✅ Berhasil menambahkan Admin Biasa!\n• Nomor: *${norm}*${normLid ? `\n• LID   : *${normLid}*` : ''}\n• Nama  : *${name}*\n• Peran : *Admin Biasa (Operasional)*`
     };
+}
+
+/**
+ * Menautkan LID WhatsApp ke nomor telepon terdaftar
+ */
+export function linkLid(phoneNumber, lid) {
+    const normPhone = normalizeNumber(phoneNumber);
+    const normLid = normalizeNumber(lid);
+    if (!normPhone || !normLid) {
+        return { success: false, message: '⚠️ Nomor HP dan LID harus valid.' };
+    }
+    const data = loadWhitelist();
+    const user = data.users.find(u => normalizeNumber(u.number) === normPhone);
+    if (!user) {
+        return { success: false, message: `⚠️ Nomor HP *${normPhone}* belum terdaftar dalam whitelist. Tambahkan dulu dengan *!tambahnomor*.` };
+    }
+    user.lid = normLid;
+    saveWhitelist(data);
+    return { success: true, message: `✅ Berhasil menautkan LID *${normLid}* ke akun *${user.name}* (${user.number})!` };
+}
+
+/**
+ * Resolusi JID balasan pesan:
+ * Mencegah error enkripsi E2EE "Menunggu pesan ini" pada self-chat multi-device Baileys
+ * dan menormalkan pengirim @lid ke format JID nomor telepon terdaftar (@s.whatsapp.net).
+ */
+export function resolveReplyJid(sock, sender, normSender) {
+    const normalizedSender = normSender || (sender ? normalizeNumber(sender) : '');
+    const botUserNumber = sock?.user?.id ? normalizeNumber(sock.user.id) : '';
+    const botLid = sock?.user?.lid ? normalizeNumber(sock.user.lid) : '';
+
+    // Self-chat: jika pengirim adalah bot itu sendiri, selalu balas ke JID nomor telepon bot
+    if (
+        (botUserNumber && normalizedSender === botUserNumber) ||
+        (botLid && normalizedSender === botLid) ||
+        normalizedSender === '168779396993221' ||
+        normalizedSender === '6285852559058'
+    ) {
+        return `${botUserNumber || '6285852559058'}@s.whatsapp.net`;
+    }
+
+    // Jika pengirim mengirim via LID tetapi terdaftar di whitelist dengan nomor HP, balas ke nomor HP
+    if (sender && sender.endsWith('@lid')) {
+        const wl = loadWhitelist();
+        const matched = wl.users?.find(u => u.lid && normalizeNumber(u.lid) === normalizedSender);
+        if (matched?.number) {
+            return `${normalizeNumber(matched.number)}@s.whatsapp.net`;
+        }
+    }
+
+    return sender;
 }
 
 /**

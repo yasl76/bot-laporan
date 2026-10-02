@@ -2,7 +2,7 @@
  * index.js - WhatsApp Bot Bootstrap & Orchestrator
  * Lean Entry Point (<150 lines)
  */
-import { startWhatsAppConnection } from './src/connection.js';
+import { startWhatsAppConnection, storeMessage } from './src/connection.js';
 import { startScheduler, stopScheduler } from './src/scheduler.js';
 import {
     handleDocumentUpload,
@@ -83,6 +83,8 @@ export function resolveSenderContext(sock, m) {
 export async function onIncomingMessage(sock, { messages } = {}) {
     const m = messages?.[0];
     if (!m || !m.message) return;
+
+    storeMessage(m);
 
     const senderContext = resolveSenderContext(sock, m);
 

@@ -7,7 +7,8 @@
 import fs from 'fs';
 import path from 'path';
 import { downloadMediaMessage } from '@whiskeysockets/baileys';
-import { loadWhitelist } from '../whitelist_helper.js';
+import { loadWhitelist, normalizeNumber, resolveReplyJid } from '../whitelist_helper.js';
+import { storeMessage } from './connection.js';
 import { loadConfig, getStoreInfo } from '../config_helper.js';
 import { analyzePareto, generatePbExcel, getPbSummaryText } from '../pareto_analyzer.js';
 import { parsePosJournal, formatPosAuditMessage, getActiveOrLatestShift, calculateVariance, formatVarianceMessage } from '../struk_parser.js';
@@ -18,6 +19,30 @@ import { parseNominal, formatRp, formatDateFileName } from './formatters.js';
 const userSessions = new Map();
 
 export const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Bungkus sock.sendMessage agar selalu menggunakan JID balasan yang dinormalisasi
+ * dan menyimpan pesan terkirim ke messageStore untuk mekanisme retry E2EE.
+ */
+function wrapReplySocket(sock, sender, normSender) {
+    if (!sock || !sock.sendMessage) return sock;
+    const targetSender = resolveReplyJid(sock, sender, normSender);
+    const originalSendMessage = sock.sendMessage.bind(sock);
+
+    return new Proxy(sock, {
+        get(target, prop) {
+            if (prop === 'sendMessage') {
+                return async (jid, content, sendOpts) => {
+                    const destJid = (jid === sender) ? targetSender : resolveReplyJid(target, jid, normalizeNumber(jid));
+                    const res = await originalSendMessage(destJid, content, sendOpts);
+                    if (res) storeMessage(res);
+                    return res;
+                };
+            }
+            return target[prop];
+        }
+    });
+}
 
 function isSessionExpired(session) {
     return Date.now() - session.timestamp > SESSION_TIMEOUT_MS;
@@ -139,6 +164,7 @@ export async function handleDocumentUpload(sock, m, senderContext, options = {})
 
     const sender = senderContext?.sender || m?.key?.remoteJid;
     const normSender = senderContext?.normSender || (sender ? sender.replace(/[^0-9]/g, '') : '');
+    sock = wrapReplySocket(sock, sender, normSender);
     const isSenderAllowed = !!senderContext?.isSenderAllowed;
     const cleanText = (senderContext?.cleanText ?? doc.caption ?? '').trim();
 
@@ -301,6 +327,8 @@ export async function handleInteractiveResponse(sock, m, senderContext) {
     const sender = senderContext?.sender || m?.key?.remoteJid;
     const normSender = senderContext?.normSender || (sender ? sender.replace(/[^0-9]/g, '') : '');
     if (!normSender || !userSessions.has(normSender)) return false;
+
+    sock = wrapReplySocket(sock, sender, normSender);
 
     const session = userSessions.get(normSender);
 
