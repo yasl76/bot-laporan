@@ -56,22 +56,49 @@ export function loadWhitelist() {
             }
         }
 
-        if (data.admin_secondary && normalizeNumber(data.admin_secondary) === '6285123338591') {
+        if (data.admin_secondary) {
             data.admin_secondary = null;
+        }
+
+        if (!data.admin) {
+            data.admin = DEFAULT_SUPER_ADMINS[0];
+        }
+        if (!data.admin_lid) {
+            data.admin_lid = DEFAULT_SUPER_ADMINS[1];
         }
 
         if (!data.users || !Array.isArray(data.users)) {
             data.users = [];
         } else {
-            // Hapus mantan super admin cadangan 6285123338591 dari users jika masih ada
-            data.users = data.users.filter(u => normalizeNumber(u.number) !== '6285123338591');
+            // Hapus mantan super admin cadangan 6285123338591 dari users jika masih ada (baik no HP, LID, maupun nama)
+            data.users = data.users.filter(u => 
+                normalizeNumber(u.number) !== '6285123338591' &&
+                (!u.lid || normalizeNumber(u.lid) !== '6285123338591') &&
+                u.name !== 'Super Admin Cadangan'
+            );
         }
 
-        // Pastikan Super Admin Utama memiliki link ke admin_lid jika belum ada
-        const saUtama = data.users.find(u => normalizeNumber(u.number) === DEFAULT_SUPER_ADMINS[0]);
-        if (saUtama && !saUtama.lid) {
-            saUtama.lid = DEFAULT_SUPER_ADMINS[1];
+        // Pastikan Super Admin Utama terdaftar dan tertaut ke LID
+        let saUtama = data.users.find(u => normalizeNumber(u.number) === DEFAULT_SUPER_ADMINS[0]);
+        if (!saUtama) {
+            saUtama = {
+                number: DEFAULT_SUPER_ADMINS[0],
+                lid: DEFAULT_SUPER_ADMINS[1],
+                name: 'Super Admin Utama',
+                role: 'super_admin'
+            };
+            data.users.unshift(saUtama);
+        } else {
+            saUtama.role = 'super_admin';
+            if (!saUtama.lid) {
+                saUtama.lid = DEFAULT_SUPER_ADMINS[1];
+            }
         }
+
+        // Hapus duplikat user jika LID Super Admin Utama sempat terdaftar sebagai entri user terpisah
+        data.users = data.users.filter(u =>
+            !(u !== saUtama && (normalizeNumber(u.number) === DEFAULT_SUPER_ADMINS[1] || u.name === 'Super Admin HP (LID)'))
+        );
 
         // Pastikan Super Admin terdaftar di users dengan role super_admin
         // Namun hormati role jika pengguna sudah terdaftar secara eksplisit sebagai admin_biasa

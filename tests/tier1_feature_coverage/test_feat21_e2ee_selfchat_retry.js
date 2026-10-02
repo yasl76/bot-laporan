@@ -12,7 +12,8 @@ import {
     loadWhitelist,
     saveWhitelist,
     normalizeNumber,
-    DEFAULT_SUPER_ADMINS
+    DEFAULT_SUPER_ADMINS,
+    listNumbers
 } from '../../whitelist_helper.js';
 import {
     messageStore,
@@ -203,7 +204,7 @@ export async function runTests() {
             console.log('  ✔ Case 21.7: storeMessage and getMessage successfully resolve encryption retry keys');
         }
 
-        // Test 21.8: Missing whitelist.json initializes clean default schema without duplicate LID user
+        // Test 21.8: Missing whitelist.json and corrupted/empty schemas initialize clean default schema without duplicate LID user
         {
             if (fs.existsSync('whitelist.json')) {
                 fs.unlinkSync('whitelist.json');
@@ -218,7 +219,45 @@ export async function runTests() {
             const saUtama = freshWl.users.find(u => u.number === '6285852559058');
             assert.ok(saUtama);
             assert.strictEqual(saUtama.lid, '168779396993221');
-            console.log('  ✔ Case 21.8: Missing whitelist.json initializes clean schema with merged LID and no duplicate LID user');
+
+            // Subcase: Existing file with empty users array must still ensure sole Super Admin with merged LID
+            fs.writeFileSync('whitelist.json', JSON.stringify({
+                super_admins: ['6285852559058', '168779396993221'],
+                users: []
+            }));
+            const reloadedEmpty = loadWhitelist();
+            const saCountEmpty = reloadedEmpty.users.filter(u => u.role === 'super_admin');
+            assert.strictEqual(saCountEmpty.length, 1, 'Must have exactly 1 super admin user');
+            assert.strictEqual(saCountEmpty[0].number, '6285852559058');
+            assert.strictEqual(saCountEmpty[0].lid, '168779396993221');
+
+            // Subcase: Existing file with separate LID user must deduplicate into single user
+            fs.writeFileSync('whitelist.json', JSON.stringify({
+                admin: '6285852559058',
+                admin_secondary: '6285123338591',
+                super_admins: ['6285852559058', '6285123338591', '168779396993221'],
+                users: [
+                    { number: '6285852559058', name: 'Super Admin Utama', role: 'super_admin' },
+                    { number: '168779396993221', name: 'Super Admin HP (LID)', role: 'super_admin' },
+                    { number: '6285123338591', name: 'Super Admin Cadangan', role: 'super_admin' }
+                ]
+            }));
+            const reloadedDedup = loadWhitelist();
+            assert.strictEqual(reloadedDedup.admin_secondary, null);
+            assert.strictEqual(reloadedDedup.super_admins.includes('6285123338591'), false);
+            assert.strictEqual(reloadedDedup.users.some(u => u.number === '6285123338591'), false);
+            assert.strictEqual(reloadedDedup.users.some(u => u.name === 'Super Admin Cadangan'), false);
+            assert.strictEqual(reloadedDedup.users.some(u => u.name === 'Super Admin HP (LID)'), false);
+            const saCountDedup = reloadedDedup.users.filter(u => u.role === 'super_admin');
+            assert.strictEqual(saCountDedup.length, 1, 'Must have exactly 1 super admin user after deduplication');
+            assert.strictEqual(saCountDedup[0].number, '6285852559058');
+            assert.strictEqual(saCountDedup[0].lid, '168779396993221');
+
+            const listText = listNumbers();
+            assert.ok(listText.includes('👑 *SUPER ADMIN (1):*'), 'List must show exactly 1 Super Admin');
+            assert.ok(listText.includes('6285852559058 - Super Admin Utama (LID: 168779396993221)'));
+
+            console.log('  ✔ Case 21.8: Missing whitelist.json and corrupted/empty schemas initialize clean schema with merged LID and no duplicate LID user');
         }
 
         // Test 21.9: isLibsignalError detects connection closed errors, wrapped Boom objects, and closed session warnings
