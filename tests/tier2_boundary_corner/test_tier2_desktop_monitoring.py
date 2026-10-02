@@ -21,6 +21,7 @@ if str(BOT_ROOT) not in sys.path:
 
 from src.pareto_engine import calculate_pareto, get_restock_recommendations
 from src.recap_engine import calculate_multi_period_recap
+from src.database import get_all_periods
 from monitoring_agent import (
     probe_bot_process,
     probe_whatsapp_session,
@@ -147,16 +148,18 @@ def run_tests():
     assert res_none['items_df'].empty
     passed_count += 1
 
-    # 2.13.2 Multi-period recap with multiple periods (periods 20 and 21)
-    res_multi = calculate_multi_period_recap([20, 21])
+    # 2.13.2 Multi-period recap with multiple periods
+    all_p = get_all_periods()
+    p_ids = [p['id'] for p in all_p[:2]] if len(all_p) >= 2 else [41, 42]
+    res_multi = calculate_multi_period_recap(p_ids)
     assert 'summary' in res_multi
-    assert res_multi['summary']['num_periods'] == 2
+    assert res_multi['summary']['num_periods'] == len(p_ids)
     passed_count += 1
 
     # 2.13.3 Summary averages divided by num_periods
     avg_omset = res_multi['summary']['avg_monthly_omset']
     tot_omset = res_multi['summary']['total_omset']
-    assert abs(avg_omset - (tot_omset / 2.0)) < 0.01
+    assert abs(avg_omset - (tot_omset / float(len(p_ids)))) < 0.01
     passed_count += 1
 
     # 2.13.4 Class percentages sum to 100%

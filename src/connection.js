@@ -9,7 +9,7 @@
  *    and reconnect backoff orchestration
  */
 
-import { makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
@@ -20,7 +20,8 @@ export const LIBSIGNAL_ERROR_PATTERNS = [
     'Over 2000 messages',
     'SessionError',
     'Closing stale open session',
-    'Failed to decrypt message'
+    'Failed to decrypt message',
+    'Connection Closed'
 ];
 
 export const messageStore = new Map();
@@ -172,7 +173,10 @@ export async function startWhatsAppConnection({ sessionDir = 'sesi_bot', onOpen,
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
 
     const sock = makeWASocket({
-        auth: state,
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
+        },
         printQRInTerminal: false,
         browser: ['Chrome (Linux)', 'Chrome', '10.0.0'],
         logger: pino({ level: 'silent' }),
@@ -180,6 +184,13 @@ export async function startWhatsAppConnection({ sessionDir = 'sesi_bot', onOpen,
             return messageStore.get(key.id) || undefined;
         }
     });
+
+    const rawSendMessage = sock.sendMessage.bind(sock);
+    sock.sendMessage = async (jid, content, options = {}) => {
+        const res = await rawSendMessage(jid, content, options);
+        if (res) storeMessage(res);
+        return res;
+    };
 
     sock.ev.on('creds.update', saveCreds);
 

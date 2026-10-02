@@ -57,7 +57,7 @@ export async function runTests() {
             console.log('  ✔ Case 21.1: linkLid successfully links LID and validates inputs');
         }
 
-        // Test 21.2: resolveReplyJid properly resolves self-chat and registered LIDs
+        // Test 21.2: resolveReplyJid properly preserves sender JID
         {
             const mockSock = {
                 user: { id: '6285852559058:78@s.whatsapp.net', lid: '168779396993221:0@lid' }
@@ -65,7 +65,7 @@ export async function runTests() {
 
             // Self-chat via LID
             const r1 = resolveReplyJid(mockSock, '168779396993221@lid', '168779396993221');
-            assert.strictEqual(r1, '6285852559058@s.whatsapp.net');
+            assert.strictEqual(r1, '168779396993221@lid');
 
             // Self-chat via bot phone number
             const r2 = resolveReplyJid(mockSock, '6285852559058@s.whatsapp.net', '6285852559058');
@@ -73,7 +73,7 @@ export async function runTests() {
 
             // Whitelisted user via LID (Raffi)
             const r3 = resolveReplyJid(mockSock, '215633832722432@lid', '215633832722432');
-            assert.strictEqual(r3, '6282264017152@s.whatsapp.net');
+            assert.strictEqual(r3, '215633832722432@lid');
 
             // Whitelisted user via standard phone JID
             const r4 = resolveReplyJid(mockSock, '6282264017152@s.whatsapp.net', '6282264017152');
@@ -82,7 +82,11 @@ export async function runTests() {
             // Stranger / unknown LID
             const r5 = resolveReplyJid(mockSock, '999999999999@lid', '999999999999');
             assert.strictEqual(r5, '999999999999@lid');
-            console.log('  ✔ Case 21.2: resolveReplyJid routes self-chat & LIDs to phone numbers to prevent E2EE stall');
+
+            // Empty sender returns empty string
+            const r6 = resolveReplyJid(mockSock, '', '');
+            assert.strictEqual(r6, '');
+            console.log('  ✔ Case 21.2: resolveReplyJid preserves original sender JID for both @lid and @s.whatsapp.net');
         }
 
         // Test 21.3: Super Admin vs Regular Admin privilege boundaries (Raffi isolation)
@@ -140,7 +144,7 @@ export async function runTests() {
             console.log('  ✔ Case 21.5: cleanupOldSessions safely disabled to protect cryptographic state');
         }
 
-        // Test 21.6: handleCommand wraps sock.sendMessage, routes to phone JID, and stores sent message
+        // Test 21.6: handleCommand wraps sock.sendMessage, preserves sender JID, and stores sent message
         {
             const sent = [];
             const mockSock = {
@@ -159,11 +163,11 @@ export async function runTests() {
 
             assert.strictEqual(handled, true);
             assert.strictEqual(sent.length, 1);
-            // Must send to standard phone JID, not @lid!
-            assert.strictEqual(sent[0].jid, '6285852559058@s.whatsapp.net');
+            // Must preserve original sender JID (@lid)
+            assert.strictEqual(sent[0].jid, '168779396993221@lid');
             // Outgoing message must be in messageStore
             assert.ok(messageStore.has('OUTGOING_MSG_001'));
-            console.log('  ✔ Case 21.6: handleCommand routes self-chat to phone JID and registers outgoing message in messageStore');
+            console.log('  ✔ Case 21.6: handleCommand preserves sender @lid JID and registers outgoing message in messageStore');
         }
 
         // Test 21.7: storeMessage caches incoming message and getMessage resolves key

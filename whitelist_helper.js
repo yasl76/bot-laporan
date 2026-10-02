@@ -201,33 +201,11 @@ export function linkLid(phoneNumber, lid) {
 
 /**
  * Resolusi JID balasan pesan:
- * Mencegah error enkripsi E2EE "Menunggu pesan ini" pada self-chat multi-device Baileys
- * dan menormalkan pengirim @lid ke format JID nomor telepon terdaftar (@s.whatsapp.net).
+ * Mempertahankan JID asal pengirim (sender) agar format stanza balasan cocok
+ * dengan thread chat di perangkat pengguna (baik @lid maupun @s.whatsapp.net).
  */
 export function resolveReplyJid(sock, sender, normSender) {
-    const normalizedSender = normSender || (sender ? normalizeNumber(sender) : '');
-    const botUserNumber = sock?.user?.id ? normalizeNumber(sock.user.id) : '';
-    const botLid = sock?.user?.lid ? normalizeNumber(sock.user.lid) : '';
-
-    // Self-chat: jika pengirim adalah bot itu sendiri, selalu balas ke JID nomor telepon bot
-    if (
-        (botUserNumber && normalizedSender === botUserNumber) ||
-        (botLid && normalizedSender === botLid) ||
-        normalizedSender === '168779396993221' ||
-        normalizedSender === '6285852559058'
-    ) {
-        return `${botUserNumber || '6285852559058'}@s.whatsapp.net`;
-    }
-
-    // Jika pengirim mengirim via LID tetapi terdaftar di whitelist dengan nomor HP, balas ke nomor HP
-    if (sender && sender.endsWith('@lid')) {
-        const wl = loadWhitelist();
-        const matched = wl.users?.find(u => u.lid && normalizeNumber(u.lid) === normalizedSender);
-        if (matched?.number) {
-            return `${normalizeNumber(matched.number)}@s.whatsapp.net`;
-        }
-    }
-
+    if (!sender) return '';
     return sender;
 }
 
