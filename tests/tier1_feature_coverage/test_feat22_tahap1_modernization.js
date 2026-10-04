@@ -5,7 +5,8 @@ import ExcelJS from 'exceljs';
 import xlsx from 'xlsx';
 import { createTestSandbox, createMockSocket } from '../helpers/test_fixture_helper.js';
 import { generateRekapExcel, getStructuredTextRekap } from '../../rekap_helper.js';
-import { parseYcgOrSosisExcel, isYcgOrSosisFile } from '../../ycg_parser.js';
+import { aggregateRekapData } from '../../exceljs_rekap_builder.js';
+import { parseYcgOrSosisExcel, isYcgOrSosisFile, extractDateFromFilenameOrHeader } from '../../ycg_parser.js';
 import { handleCommand } from '../../src/command_handler.js';
 import {
     handleDocumentUpload,
@@ -40,9 +41,9 @@ export async function runTests() {
         // =====================================================================
         {
             const sampleData = [
-                { tanggal: '01/10/2026', spd: 5000000, std: 140, apc: 35714, mgrp: 1050000, mg: '21%', lpp: 4000000, avg_spd: 5000000, yccg: 27, sosis_ori: 10, sosis_keju: 5, total_rte: 15, mpp: 0, nbh: 0 },
+                { tanggal: '01/10/2026', spd: 5000000, std: 140, apc: 35714, mgrp: 1050000, mg: '21', lpp: 4000000, avg_spd: 5000000, yccg: 27, sosis_ori: 10, sosis_keju: 5, total_rte: 15, mpp: 0, nbh: 0 },
                 { tanggal: '02/10/2026', spd: 4800000, std: 135, apc: 35555, mgrp: 1008000, mg: '21%', lpp: 3800000, avg_spd: 4900000, yccg: 49, sosis_ori: 12, sosis_keju: 7, total_rte: 19, mpp: 2, nbh: 1 },
-                { tanggal: '03/10/2026', spd: 5200000, std: 145, apc: 35862, mgrp: 1092000, mg: '21%', lpp: 4100000, avg_spd: 5000000, yccg: 15, sosis_ori: 8, sosis_keju: 4, total_rte: 12, mpp: 0, nbh: 0 }
+                { tanggal: '03/10/2026', spd: 5200000, std: 145, apc: 35862, mgrp: 1092000, mg: 21, lpp: 4100000, avg_spd: 5000000, yccg: 15, sosis_ori: 8, sosis_keju: 4, mpp: 0, nbh: 0 }
             ];
 
             const outPath = path.join(sandbox.path, 'Rekap_Eksekutif_Modern.xlsx');
@@ -86,6 +87,19 @@ export async function runTests() {
             const cellAchMtd = wsHarian.getCell('J6');
             assert.strictEqual(cellAchMtd.numFmt, '0.00%');
 
+            // Verifikasi MG% row formatting ketika input tanpa tanda '%'
+            const row1MgCell = wsHarian.getCell('H9');
+            assert.strictEqual(row1MgCell.value, 0.21, 'MG value for "21" must be parsed to 0.21');
+            assert.strictEqual(row1MgCell.numFmt, '0.00%', 'MG cell must have 0.00% format');
+
+            // Verifikasi fallback Total RTE saat field total_rte tidak ada
+            const row3RteCell = wsHarian.getCell('O11');
+            assert.strictEqual(row3RteCell.value, 12, 'Total RTE must fallback to sosis_ori(8) + sosis_keju(4) = 12');
+
+            // Verifikasi aggregateRekapData fallback
+            const agg = aggregateRekapData([{ sosis_ori: 5, sosis_keju: 3 }]);
+            assert.strictEqual(agg.totalRte, 8, 'aggregateRekapData must calculate totalRte from sosis variants when total_rte is 0');
+
             // Verifikasi Freeze Pane di baris 8
             assert.ok(wsHarian.views && wsHarian.views.length > 0, 'Views must be defined');
             assert.strictEqual(wsHarian.views[0].state, 'frozen', 'Freeze pane state must be frozen');
@@ -104,7 +118,7 @@ export async function runTests() {
             }
             assert.strictEqual(threwEmpty, true, 'Empty data list must throw error');
 
-            console.log('  ✔ Case 22.1: Modul 1 generateRekapExcel (ExcelJS Navy Blue styling, 4 KPI cards, Rupiah/Percent format, freeze panes) verified!');
+            console.log('  ✔ Case 22.1: Modul 1 generateRekapExcel (ExcelJS Navy Blue styling, 4 KPI cards, Rupiah/Percent format, freeze panes, MG% robust parsing) verified!');
         }
 
         // =====================================================================
@@ -140,7 +154,7 @@ export async function runTests() {
             clearUserSession(kasirNorm);
             assert.strictEqual(hasPendingSession(kasirNorm), false);
 
-            const ctxLapor = { sender: kasirJid, normSender: kasirNorm, isSenderAllowed: true, isSenderSuperAdmin: false, cleanText: '!lapor', lowerText: '!lapor' };
+            const ctxLapor = { sender: kasirJid, normSender: kasirNorm, isSenderAllowed: true, isSenderSuperAdmin: false, cleanText: '!lapor harian', lowerText: '!lapor harian' };
             await handleCommand(mockSock, { key: { remoteJid: kasirJid } }, ctxLapor);
 
             assert.strictEqual(mockSock.sentMessages.length, 1);
@@ -163,7 +177,7 @@ export async function runTests() {
 
             // 2.5 Test !broadcastmenu: Berhasil jika dikirim Super Admin
             mockSock.sentMessages.length = 0;
-            const ctxBroadcastSuper = { sender: superAdminJid, normSender: superAdminNorm, isSenderAllowed: true, isSenderSuperAdmin: true, cleanText: '!broadcastmenu', lowerText: '!broadcastmenu' };
+            const ctxBroadcastSuper = { sender: superAdminJid, normSender: superAdminNorm, isSenderAllowed: true, isSenderSuperAdmin: true, cleanText: '!broadcastmenu sekarang', lowerText: '!broadcastmenu sekarang' };
             await handleCommand(mockSock, { key: { remoteJid: superAdminJid } }, ctxBroadcastSuper);
 
             // Verifikasi bahwa pesan pengumuman terkirim ke anggota whitelist
@@ -198,7 +212,36 @@ export async function runTests() {
             const parseDay1 = parseYcgOrSosisExcel(realYcgPath, { targetDay: 1 });
             assert.strictEqual(parseDay1.yccg, 27, 'Penjualan tanggal 1 harus 27 cup');
 
-            // 3.2 Verifikasi parser terhadap mock file Sosis RTE
+            // 3.2 Verifikasi deteksi tanggal nama bulan bahasa Indonesia & zero padded day
+            const indonesianHeaderRows = [
+                [],
+                ['Tgl.Cetak : 3/10/2026'],
+                [], [], [], [], [], [], [], [],
+                ['Tgl.Cetak : 01-Oktober-2026 s/d 31-Oktober-2026']
+            ];
+            const parsedIdDate = extractDateFromFilenameOrHeader('Laporan.xls', indonesianHeaderRows);
+            assert.strictEqual(parsedIdDate.month, 10, 'Indonesian month "Oktober" must be recognized as 10');
+            assert.strictEqual(parsedIdDate.day, 3, 'Day must be extracted as 3');
+
+            // 3.3 Verifikasi zero-padded header parsing ('01', '02', '03')
+            const zeroPaddedFile = path.join(sandbox.path, 'PAD_03-10-2026.xlsx');
+            {
+                const wb = xlsx.utils.book_new();
+                const rows = [];
+                for (let i = 0; i < 14; i++) rows.push([]);
+                rows.push(['No', 'PLU', '', '', '', '', '', 'DESKRIPSI']);
+                rows.push(['', '', '', '', '', '', '', '', '', '', '', '', '', '01', '', '', '02', '', '', '03']);
+                rows.push([]);
+                rows.push([]);
+                rows.push([1, '', '1001', '', '', '', '', '', 'KOPI SUSU', '', '', '', 2, '', '', 5, '', '', 11]);
+                const ws = xlsx.utils.aoa_to_sheet(rows);
+                xlsx.utils.book_append_sheet(wb, ws, 'Sheet1');
+                xlsx.writeFile(wb, zeroPaddedFile);
+            }
+            const parsePad = parseYcgOrSosisExcel(zeroPaddedFile, { targetDay: 3 });
+            assert.strictEqual(parsePad.yccg, 11, 'Zero-padded header "03" must match targetDay 3');
+
+            // 3.4 Verifikasi parser terhadap mock file Sosis RTE dengan item pelengkap non-sosis (SAOS SAMBAL)
             const sosisMockFile = path.join(sandbox.path, 'SOSIS_RTE_03-10-2026.xlsx');
             {
                 const wb = xlsx.utils.book_new();
@@ -212,6 +255,10 @@ export async function runTests() {
                 rows.push([]);
                 rows.push([]);
                 rows.push([2, '', '3002', '', '', '', '', '', 'SOSIS BAKAR KEJU RTE', '', '', '', 5, '', '', 7, '', '', 4]);
+                rows.push([]);
+                rows.push([]);
+                // Item pelengkap non-sosis: tidak boleh mencemari YCCG
+                rows.push([3, '', '9999', '', '', '', '', '', 'SAOS SAMBAL PEDAS EXTRA', '', '', '', 2, '', '', 2, '', '', 5]);
                 const ws = xlsx.utils.aoa_to_sheet(rows);
                 ws['!merges'] = [
                     { s: { c: 12, r: 18 }, e: { c: 14, r: 18 } },
@@ -219,7 +266,10 @@ export async function runTests() {
                     { s: { c: 18, r: 18 }, e: { c: 20, r: 18 } },
                     { s: { c: 12, r: 21 }, e: { c: 14, r: 21 } },
                     { s: { c: 15, r: 21 }, e: { c: 17, r: 21 } },
-                    { s: { c: 18, r: 21 }, e: { c: 20, r: 21 } }
+                    { s: { c: 18, r: 21 }, e: { c: 20, r: 21 } },
+                    { s: { c: 12, r: 24 }, e: { c: 14, r: 24 } },
+                    { s: { c: 15, r: 24 }, e: { c: 17, r: 24 } },
+                    { s: { c: 18, r: 24 }, e: { c: 20, r: 24 } }
                 ];
                 xlsx.utils.book_append_sheet(wb, ws, 'Sheet1');
                 xlsx.writeFile(wb, sosisMockFile);
@@ -228,12 +278,14 @@ export async function runTests() {
             assert.strictEqual(isYcgOrSosisFile(sosisMockFile), true);
             const parseSosis = parseYcgOrSosisExcel(sosisMockFile, { fileName: 'SOSIS_RTE_03-10-2026.xlsx' });
             assert.strictEqual(parseSosis.isSosis, true);
+            assert.strictEqual(parseSosis.isYcg, false, 'Sosis-only file must not be marked as YCG');
+            assert.strictEqual(parseSosis.yccg, null, 'Sosis-only file must have null yccg');
             assert.strictEqual(parseSosis.targetDay, 3);
             assert.strictEqual(parseSosis.sosisOri, 8, 'Sosis Ori tanggal 3 harus 8 pcs');
             assert.strictEqual(parseSosis.sosisKeju, 4, 'Sosis Keju tanggal 3 harus 4 pcs');
             assert.strictEqual(parseSosis.totalRte, 12, 'Total RTE tanggal 3 harus 12 pcs');
 
-            // 3.3 Enforce Session Protection: Upload di LUAR sesi !lapor harus DITOLAK
+            // 3.5 Enforce Session Protection: Upload di LUAR sesi !lapor harus DITOLAK
             clearUserSession(kasirNorm);
             const mockSock = createMockSocket();
             const ycgBuffer = fs.readFileSync(realYcgPath);
@@ -258,7 +310,7 @@ export async function runTests() {
             assert.ok(rejectMsg.includes('hanya dapat diunggah saat sesi pelaporan aktif'), 'Upload outside session must be rejected with notice');
             assert.ok(rejectMsg.includes('!lapor'), 'Rejection must instruct to run !lapor');
 
-            // 3.4 Upload di DALAM sesi !lapor: DITERIMA dan menghasilkan draf laporan terisi otomatis
+            // 3.6 Upload di DALAM sesi !lapor: DITERIMA dan menghasilkan draf laporan terisi otomatis
             mockSock.sentMessages.length = 0;
             // Aktifkan sesi pelaporan kasir
             setPendingLaporSession(kasirNorm);
@@ -273,7 +325,23 @@ export async function runTests() {
             assert.ok(acceptMsg.includes('Penjualan YCCG: *15 Cup*'));
             assert.ok(acceptMsg.includes('YCCG: 15'), 'Draft template must have YCCG: 15 auto-filled');
 
-            // 3.5 Unggah file Sosis di sesi yang sama: nilai YCCG dan Sosis digabungkan
+            // 3.7 Upload dengan caption targetDay override (cth: caption "2")
+            mockSock.sentMessages.length = 0;
+            const docMsgYcgDay2 = {
+                ...docMsgYcg,
+                message: {
+                    documentMessage: {
+                        ...docMsgYcg.message.documentMessage,
+                        caption: '2'
+                    }
+                }
+            };
+            const handledInsideDay2 = await handleDocumentUpload(mockSock, docMsgYcgDay2, { ...ctxKasirUpload, cleanText: '2' });
+            assert.strictEqual(handledInsideDay2, true);
+            const acceptDay2 = mockSock.sentMessages[0].content.text;
+            assert.ok(acceptDay2.includes('Penjualan YCCG: *49 Cup*'), 'Day 2 from caption override must yield 49 cups');
+
+            // 3.8 Unggah file Sosis di sesi yang sama: nilai YCCG dan Sosis digabungkan
             mockSock.sentMessages.length = 0;
             const sosisBuffer = fs.readFileSync(sosisMockFile);
             const docMsgSosis = {
@@ -294,11 +362,27 @@ export async function runTests() {
             assert.ok(sosisAcceptMsg.includes('DATA EXCEL BERHASIL DIBACA'));
             assert.ok(sosisAcceptMsg.includes('Sosis Original: *8 Pcs*'));
             assert.ok(sosisAcceptMsg.includes('Sosis Keju    : *4 Pcs*'));
-            assert.ok(sosisAcceptMsg.includes('YCCG: 15'), 'Preserved YCCG value from prior upload');
+            assert.ok(sosisAcceptMsg.includes('YCCG: 49'), 'Preserved YCCG value from prior upload');
             assert.ok(sosisAcceptMsg.includes('Sosis Ori: 8'), 'Auto-filled Sosis Ori: 8');
             assert.ok(sosisAcceptMsg.includes('Sosis Keju: 4'), 'Auto-filled Sosis Keju: 4');
 
-            // 3.6 Pembatalan sesi pelaporan dengan mengetik 'batal'
+            // 3.9 Error handling upload: file YCG rusak memberikan pesan error spesifik YCG bukan file pareto
+            mockSock.sentMessages.length = 0;
+            const corruptDocMsg = {
+                key: { remoteJid: kasirJid },
+                message: {
+                    documentMessage: {
+                        fileName: 'Y COFFEE ERROR.xls',
+                        mimetype: 'application/vnd.ms-excel'
+                    }
+                },
+                _mockBuffer: Buffer.from('corrupt content')
+            };
+            await handleDocumentUpload(mockSock, corruptDocMsg, ctxKasirUpload);
+            const errReply = mockSock.sentMessages[0].content.text;
+            assert.ok(errReply.includes('Laporan Yummy Coffee / Sosis'), 'Error message must specify Yummy Coffee / Sosis, NOT pareto');
+
+            // 3.10 Pembatalan sesi pelaporan dengan mengetik 'batal'
             mockSock.sentMessages.length = 0;
             const handledBatal = await handleInteractiveResponse(mockSock, { key: { remoteJid: kasirJid } }, {
                 sender: kasirJid,
@@ -310,7 +394,7 @@ export async function runTests() {
             assert.ok(mockSock.sentMessages[0].content.text.includes('Sesi pelaporan closing telah dibatalkan'));
             assert.strictEqual(hasPendingSession(kasirNorm), false, 'Session must be cleared on batal');
 
-            console.log('  ✔ Case 22.3: Modul 3 YCG & Sosis Excel parsing, date detection, session protection, and auto-filled draft reporting verified!');
+            console.log('  ✔ Case 22.3: Modul 3 YCG & Sosis Excel parsing, date detection, session protection, error handling, and auto-filled draft reporting verified!');
         }
 
         return { passed: 3, failed: 0, feature: 'Feature 22 (Tahap 1 Bot Modernization: Rekap ExcelJS, !menu/!lapor Separation, YCG/Sosis Parser)' };

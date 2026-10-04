@@ -16,13 +16,25 @@ export function getSafeTargetSPD(targetSPD, fallback = 4725000) {
 export function aggregateRekapData(dataList) {
     let totalSpd = 0, totalMpp = 0, totalNbh = 0, totalYccg = 0, totalSosisOri = 0, totalSosisKeju = 0, totalRte = 0;
     dataList.forEach(item => {
-        totalSpd += (typeof item.spd === 'number' ? item.spd : parseFloat(item.spd) || 0);
-        totalMpp += (typeof item.mpp === 'number' ? item.mpp : parseFloat(item.mpp) || 0);
-        totalNbh += (typeof item.nbh === 'number' ? item.nbh : parseFloat(item.nbh) || 0);
-        totalYccg += (typeof item.yccg === 'number' ? item.yccg : parseFloat(item.yccg) || 0);
-        totalSosisOri += (typeof item.sosis_ori === 'number' ? item.sosis_ori : parseFloat(item.sosis_ori) || 0);
-        totalSosisKeju += (typeof item.sosis_keju === 'number' ? item.sosis_keju : parseFloat(item.sosis_keju) || 0);
-        totalRte += (typeof item.total_rte === 'number' ? item.total_rte : parseFloat(item.total_rte) || 0);
+        const itemSpd = typeof item.spd === 'number' ? item.spd : parseFloat(item.spd) || 0;
+        const itemMpp = typeof item.mpp === 'number' ? item.mpp : parseFloat(item.mpp) || 0;
+        const itemNbh = typeof item.nbh === 'number' ? item.nbh : parseFloat(item.nbh) || 0;
+        const itemYccg = typeof item.yccg === 'number' ? item.yccg : parseFloat(item.yccg) || 0;
+        const itemSosisOri = typeof item.sosis_ori === 'number' ? item.sosis_ori : parseFloat(item.sosis_ori) || 0;
+        const itemSosisKeju = typeof item.sosis_keju === 'number' ? item.sosis_keju : parseFloat(item.sosis_keju) || 0;
+
+        let itemRte = typeof item.total_rte === 'number' ? item.total_rte : parseFloat(item.total_rte);
+        if (!Number.isFinite(itemRte) || itemRte === 0) {
+            itemRte = itemSosisOri + itemSosisKeju;
+        }
+
+        totalSpd += itemSpd;
+        totalMpp += itemMpp;
+        totalNbh += itemNbh;
+        totalYccg += itemYccg;
+        totalSosisOri += itemSosisOri;
+        totalSosisKeju += itemSosisKeju;
+        totalRte += (itemRte || 0);
     });
     return { totalSpd, totalMpp, totalNbh, totalYccg, totalSosisOri, totalSosisKeju, totalRte };
 }
@@ -212,13 +224,23 @@ export async function buildExcelJSWorkbook(dataList, outputPath, targetSPD = 472
         const row = wsHarian.getRow(rowNum);
         row.height = 20;
 
-        let mgVal = item.mg || '';
+        let mgVal = item.mg !== undefined && item.mg !== null ? item.mg : '';
         let mgNum = null;
         if (typeof mgVal === 'number') {
             mgNum = mgVal > 1 ? mgVal / 100 : mgVal;
-        } else if (typeof mgVal === 'string' && mgVal.includes('%')) {
-            const parsedMg = parseFloat(mgVal.replace('%', ''));
-            if (Number.isFinite(parsedMg)) mgNum = parsedMg / 100;
+        } else if (typeof mgVal === 'string' && mgVal.trim() !== '') {
+            const cleanMg = mgVal.replace('%', '').trim();
+            const parsedMg = parseFloat(cleanMg);
+            if (Number.isFinite(parsedMg)) {
+                mgNum = parsedMg > 1 ? parsedMg / 100 : parsedMg;
+            }
+        }
+
+        const sOri = typeof item.sosis_ori === 'number' ? item.sosis_ori : (parseFloat(item.sosis_ori) || 0);
+        const sKeju = typeof item.sosis_keju === 'number' ? item.sosis_keju : (parseFloat(item.sosis_keju) || 0);
+        let rteVal = typeof item.total_rte === 'number' ? item.total_rte : parseFloat(item.total_rte);
+        if (!Number.isFinite(rteVal) || rteVal === 0) {
+            rteVal = sOri + sKeju;
         }
 
         row.values = [
@@ -234,9 +256,9 @@ export async function buildExcelJSWorkbook(dataList, outputPath, targetSPD = 472
             itemAvgSpd,
             achMtdRatio,
             item.yccg || 0,
-            item.sosis_ori || 0,
-            item.sosis_keju || 0,
-            item.total_rte || 0,
+            sOri,
+            sKeju,
+            rteVal,
             item.mpp || 0,
             item.nbh || 0
         ];

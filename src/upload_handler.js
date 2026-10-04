@@ -218,7 +218,15 @@ export async function handleDocumentUpload(sock, m, senderContext, options = {})
                 }
 
                 try {
-                    const parsed = parseYcgOrSosisExcel(savedPath, { fileName: rawFileName });
+                    let overrideDay = undefined;
+                    if (cleanText) {
+                        const dayMatch = cleanText.match(/^(?:tgl|tanggal)?\s*(\d{1,2})$/i);
+                        if (dayMatch) {
+                            const d = parseInt(dayMatch[1], 10);
+                            if (d >= 1 && d <= 31) overrideDay = d;
+                        }
+                    }
+                    const parsed = parseYcgOrSosisExcel(savedPath, { fileName: rawFileName, targetDay: overrideDay });
                     if (parsed.yccg !== null && parsed.yccg !== undefined) {
                         currentSession.yccg = parsed.yccg;
                     }
@@ -272,6 +280,12 @@ export async function handleDocumentUpload(sock, m, senderContext, options = {})
                         `Total NBH: `;
 
                     await sock.sendMessage(sender, { text: infoTeks });
+                    return true;
+                } catch (parseErr) {
+                    console.error('Error memproses file Laporan YCG / Sosis:', parseErr);
+                    await sock.sendMessage(sender, {
+                        text: `❌ Terjadi kesalahan saat memproses file Laporan Yummy Coffee / Sosis: ${parseErr.message}`
+                    });
                     return true;
                 } finally {
                     if (savedPath) {

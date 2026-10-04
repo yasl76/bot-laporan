@@ -390,7 +390,7 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
         }
 
         // 1.14 BROADCAST MENU PEMBARUAN (!broadcastmenu)
-        if (lowerText === '!broadcastmenu') {
+        if (lowerText === '!broadcastmenu' || lowerText.startsWith('!broadcastmenu ')) {
             const wl = loadWhitelist();
             const recipients = new Set();
             if (wl.users && Array.isArray(wl.users)) {
@@ -449,8 +449,8 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
     // ============================================================
     const isTargetingOperational =
         cleanText.includes('!kirimlaporan') ||
-        lowerText === 'menu' || lowerText === '!menu' ||
-        lowerText === 'lapor' || lowerText === '!lapor' ||
+        lowerText === 'menu' || lowerText === '!menu' || lowerText.startsWith('!menu ') || lowerText.startsWith('menu ') ||
+        lowerText === 'lapor' || lowerText === '!lapor' || lowerText.startsWith('!lapor ') || lowerText.startsWith('lapor ') ||
         lowerText === '!auditkas' || lowerText === '!cekshift' ||
         lowerText === '!pb' || lowerText === 'pb' || lowerText.startsWith('!pb ') || lowerText.startsWith('pb ') ||
         lowerText === '!rekap' || lowerText === 'rekap' || lowerText.startsWith('!rekap ') || lowerText.startsWith('rekap ') ||
@@ -466,7 +466,7 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
         }
 
         // 2.1 MENU NAVIGASI OPERASIONAL (menu / !menu)
-        if (lowerText === 'menu' || lowerText === '!menu') {
+        if (lowerText === 'menu' || lowerText === '!menu' || lowerText.startsWith('!menu ') || lowerText.startsWith('menu ')) {
             const isSuper = isSenderSuperAdmin;
             const cfg = loadConfig();
 
@@ -506,7 +506,7 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
         }
 
         // 2.2 TEMPLATE LAPORAN & AKTIVASI SESI (lapor / !lapor)
-        if (lowerText === 'lapor' || lowerText === '!lapor') {
+        if (lowerText === 'lapor' || lowerText === '!lapor' || lowerText.startsWith('!lapor ') || lowerText.startsWith('lapor ')) {
             setPendingLaporSession(normSender);
 
             const templateLapor = `Halo! Silakan salin dan isi data laporan di bawah ini, lalu kirim kembali:\n\n` +

@@ -2,17 +2,34 @@ import fs from 'fs';
 import path from 'path';
 import xlsx from 'xlsx';
 
+const MONTH_NAMES = {
+    'januari': 1, 'january': 1, 'jan': 1,
+    'februari': 2, 'february': 2, 'feb': 2,
+    'maret': 3, 'march': 3, 'mar': 3,
+    'april': 4, 'apr': 4,
+    'mei': 5, 'may': 5,
+    'juni': 6, 'june': 6, 'jun': 6,
+    'juli': 7, 'july': 7, 'jul': 7,
+    'agustus': 8, 'august': 8, 'ags': 8, 'agu': 8, 'aug': 8,
+    'september': 9, 'sep': 9, 'sept': 9,
+    'oktober': 10, 'october': 10, 'okt': 10, 'oct': 10,
+    'november': 11, 'nov': 11,
+    'desember': 12, 'december': 12, 'des': 12, 'dec': 12
+};
+
 /**
  * Deteksi tanggal secara cerdas dari nama file atau isi sheet.
  * Format yang didukung:
- * - DD-MM-YYYY (cth: "Y COFFEE 03-10-2026.xls" -> day 3, month 10, year 2026)
+ * - DD-MM-YYYY / DD.MM.YYYY / DD_MM_YYYY (cth: "Y COFFEE 03-10-2026.xls" -> day 3, month 10, year 2026)
+ * - DD NamaBulan YYYY (cth: "Y COFFEE 3 Oktober 2026.xls" -> day 3, month 10, year 2026)
  * - YYYY-MM-DD (cth: "report_2026-10-03.xlsx" -> day 3, month 10, year 2026)
+ * - Compact YYYYMMDD (cth: "report_20261003.xls" -> day 3, month 10, year 2026)
  * - Header sheet "Tgl.Cetak : 10/3/2026"
  * - Fallback ke tanggal hari ini
  */
 export function extractDateFromFilenameOrHeader(fileName = '', rows = []) {
     // 1. Filename format ISO YYYY-MM-DD
-    const isoMatch = fileName.match(/(\d{4})[-_](\d{1,2})[-_](\d{1,2})/);
+    const isoMatch = fileName.match(/(\d{4})[-_. ](\d{1,2})[-_. ](\d{1,2})/);
     if (isoMatch) {
         return {
             day: parseInt(isoMatch[3], 10),
@@ -23,7 +40,7 @@ export function extractDateFromFilenameOrHeader(fileName = '', rows = []) {
     }
 
     // 2. Filename format DD-MM-YYYY (standar Indonesia)
-    const dmyMatch = fileName.match(/(?:^|[^\d])(\d{1,2})[-_](\d{1,2})[-_](\d{4})(?:[^\d]|$)/);
+    const dmyMatch = fileName.match(/(?:^|[^\d])(\d{1,2})[-_. ](\d{1,2})[-_. ](\d{4})(?:[^\d]|$)/);
     if (dmyMatch) {
         return {
             day: parseInt(dmyMatch[1], 10),
@@ -33,7 +50,32 @@ export function extractDateFromFilenameOrHeader(fileName = '', rows = []) {
         };
     }
 
-    // 3. Header sheet check (cth: Tgl.Cetak : 10/3/2026)
+    // 3. Filename format DD NamaBulan YYYY (cth: "3 Oktober 2026")
+    const dmyTextMatch = fileName.match(/(?:^|[^\d])(\d{1,2})[-_. ]([a-zA-Z]{3,10})[-_. ](\d{4})(?:[^\d]|$)/);
+    if (dmyTextMatch) {
+        const monthWord = dmyTextMatch[2].toLowerCase();
+        if (MONTH_NAMES[monthWord]) {
+            return {
+                day: parseInt(dmyTextMatch[1], 10),
+                month: MONTH_NAMES[monthWord],
+                year: parseInt(dmyTextMatch[3], 10),
+                source: 'filename_dmy_text'
+            };
+        }
+    }
+
+    // 4. Filename format Compact ISO YYYYMMDD (cth: 20261003)
+    const compactIsoMatch = fileName.match(/(?:^|[^\d])(\d{4})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?:[^\d]|$)/);
+    if (compactIsoMatch) {
+        return {
+            day: parseInt(compactIsoMatch[3], 10),
+            month: parseInt(compactIsoMatch[2], 10),
+            year: parseInt(compactIsoMatch[1], 10),
+            source: 'filename_compact_iso'
+        };
+    }
+
+    // 5. Header sheet check (cth: Tgl.Cetak : 10/3/2026 atau 3/10/2026)
     if (Array.isArray(rows)) {
         for (let r = 0; r < Math.min(rows.length, 15); r++) {
             const row = rows[r];
@@ -46,14 +88,13 @@ export function extractDateFromFilenameOrHeader(fileName = '', rows = []) {
                     const p2 = parseInt(tglMatch[2], 10);
                     const p3 = parseInt(tglMatch[3], 10);
 
-                    // Deteksi nama bulan dari sheet jika ada (cth: October)
+                    // Deteksi nama bulan dari sheet jika ada (cth: October atau Oktober)
                     let detectedMonth = null;
-                    const months = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
                     for (let r2 = 0; r2 < Math.min(rows.length, 15); r2++) {
                         const row2Text = (rows[r2] || []).join(' ').toLowerCase();
-                        for (let m = 0; m < months.length; m++) {
-                            if (row2Text.includes(months[m])) {
-                                detectedMonth = m + 1;
+                        for (const [mName, mNum] of Object.entries(MONTH_NAMES)) {
+                            if (mName.length >= 4 && row2Text.includes(mName)) {
+                                detectedMonth = mNum;
                                 break;
                             }
                         }
@@ -78,7 +119,7 @@ export function extractDateFromFilenameOrHeader(fileName = '', rows = []) {
         }
     }
 
-    // 4. Filename single day check, cth: "Y COFFEE 3.xls"
+    // 6. Filename single day check, cth: "Y COFFEE 3.xls"
     const singleDayMatch = fileName.match(/(?:coffee|ycg|sosis|rte)[^\d]*(\d{1,2})(?:\.|\b)/i);
     if (singleDayMatch) {
         const d = parseInt(singleDayMatch[1], 10);
@@ -87,7 +128,7 @@ export function extractDateFromFilenameOrHeader(fileName = '', rows = []) {
         }
     }
 
-    // 5. Fallback ke tanggal hari ini
+    // 7. Fallback ke tanggal hari ini
     const now = new Date();
     return { day: now.getDate(), month: now.getMonth() + 1, year: now.getFullYear(), source: 'today_fallback' };
 }
@@ -153,24 +194,24 @@ export function parseYcgOrSosisExcel(filePathOrBuffer, options = {}) {
     const dateInfo = extractDateFromFilenameOrHeader(fileName, rows);
     const targetDay = options.targetDay || dateInfo.day;
 
-    let isYcg = false;
-    let isSosis = false;
+    let initialIsYcg = false;
+    let initialIsSosis = false;
 
     // Deteksi judul laporan di 15 baris pertama
     for (let r = 0; r < Math.min(rows.length, 15); r++) {
         const rowText = (rows[r] || []).join(' ').toLowerCase();
         if (rowText.includes('y/coffee') || rowText.includes('y coffee') || rowText.includes('yccg')) {
-            isYcg = true;
+            initialIsYcg = true;
         }
         if (rowText.includes('sosis') || rowText.includes('sausage') || rowText.includes('rte')) {
-            isSosis = true;
+            initialIsSosis = true;
         }
     }
 
-    if (!isYcg && !isSosis) {
+    if (!initialIsYcg && !initialIsSosis) {
         const lowerName = fileName.toLowerCase();
-        if (lowerName.includes('coffee') || lowerName.includes('ycg') || lowerName.includes('kopi')) isYcg = true;
-        if (lowerName.includes('sosis') || lowerName.includes('rte') || lowerName.includes('sausage')) isSosis = true;
+        if (lowerName.includes('coffee') || lowerName.includes('ycg') || lowerName.includes('kopi')) initialIsYcg = true;
+        if (lowerName.includes('sosis') || lowerName.includes('rte') || lowerName.includes('sausage')) initialIsSosis = true;
     }
 
     // Pencarian baris header tanggal (1..31)
@@ -180,7 +221,11 @@ export function parseYcgOrSosisExcel(filePathOrBuffer, options = {}) {
         if (!Array.isArray(row)) continue;
         let dayMatches = 0;
         for (let day = 1; day <= 10; day++) {
-            if (row.some(c => String(c).trim() === String(day))) {
+            if (row.some(c => {
+                const s = String(c).trim();
+                const v = parseInt(s, 10);
+                return !isNaN(v) && v === day;
+            })) {
                 dayMatches++;
             }
         }
@@ -195,7 +240,12 @@ export function parseYcgOrSosisExcel(filePathOrBuffer, options = {}) {
     }
 
     const dateHeaderRow = rows[dateHeaderRowIdx];
-    const hCol = dateHeaderRow.findIndex(c => String(c).trim() === String(targetDay));
+    const hCol = dateHeaderRow.findIndex(c => {
+        const str = String(c).trim();
+        if (!str) return false;
+        const v = parseInt(str, 10);
+        return !isNaN(v) && v === targetDay && (str === String(targetDay) || str === String(targetDay).padStart(2, '0'));
+    });
 
     if (hCol === -1) {
         throw new Error(`Tanggal ${targetDay} tidak ditemukan dalam kolom header laporan.`);
@@ -219,27 +269,41 @@ export function parseYcgOrSosisExcel(filePathOrBuffer, options = {}) {
         const row = rows[r];
         if (!row) continue;
 
-        // Cek nomor urut di awal baris
-        const cellNo = row[0];
-        const isItemRow = cellNo !== '' && cellNo !== null && cellNo !== undefined && !isNaN(parseInt(cellNo, 10)) && parseInt(cellNo, 10) > 0;
-        if (!isItemRow) continue;
+        // Cek nomor urut di kolom 0 atau kolom 1
+        let cellNo = row[0];
+        let no = parseInt(cellNo, 10);
+        let noCol = 0;
+        if (isNaN(no) || no <= 0) {
+            cellNo = row[1];
+            no = parseInt(cellNo, 10);
+            if (!isNaN(no) && no > 0) {
+                noCol = 1;
+            }
+        }
+        if (isNaN(no) || no <= 0) continue;
 
-        const no = parseInt(cellNo, 10);
-        // Cari PLU (string angka) di kolom 1..6
+        // Cari PLU (string angka) di kolom noCol+1..6
         let plu = '';
-        for (let c = 1; c <= 6; c++) {
+        let pluCol = -1;
+        for (let c = noCol + 1; c <= 6; c++) {
             if (row[c] && /^\d+$/.test(String(row[c]).trim())) {
                 plu = String(row[c]).trim();
+                pluCol = c;
                 break;
             }
         }
 
-        // Cari Deskripsi (string berisi huruf) di kolom 4..12
+        // Cari Deskripsi (string berisi huruf) dari kolom 1 s/d kolom sebelum tanggal
         let desc = '';
-        for (let c = 4; c <= 12; c++) {
-            if (row[c] && typeof row[c] === 'string' && /[a-zA-Z]/.test(row[c])) {
-                desc = row[c].trim();
-                break;
+        for (let c = 1; c < Math.min(hCol, 15); c++) {
+            if (c === pluCol || c === noCol) continue;
+            const val = row[c];
+            if (val && typeof val === 'string' && /[a-zA-Z]/.test(val) && !val.trim().match(/^\d+$/)) {
+                const candidate = val.trim();
+                if (candidate.length > 2) {
+                    desc = candidate;
+                    break;
+                }
             }
         }
 
@@ -249,12 +313,22 @@ export function parseYcgOrSosisExcel(filePathOrBuffer, options = {}) {
 
         let qtyVal = row[dataCol];
         if (qtyVal === undefined || qtyVal === null || qtyVal === '') {
-            if (row[hCol] !== undefined && row[hCol] !== null && row[hCol] !== '') {
-                qtyVal = row[hCol];
-            } else if (dataCol > 0 && row[dataCol - 1] !== undefined && row[dataCol - 1] !== null && row[dataCol - 1] !== '') {
-                qtyVal = row[dataCol - 1];
-            } else {
-                qtyVal = 0;
+            if (m) {
+                for (let mc = m.s.c; mc <= m.e.c; mc++) {
+                    if (row[mc] !== undefined && row[mc] !== null && row[mc] !== '') {
+                        qtyVal = row[mc];
+                        break;
+                    }
+                }
+            }
+            if (qtyVal === undefined || qtyVal === null || qtyVal === '') {
+                if (row[hCol] !== undefined && row[hCol] !== null && row[hCol] !== '') {
+                    qtyVal = row[hCol];
+                } else if (dataCol > 0 && row[dataCol - 1] !== undefined && row[dataCol - 1] !== null && row[dataCol - 1] !== '') {
+                    qtyVal = row[dataCol - 1];
+                } else {
+                    qtyVal = 0;
+                }
             }
         }
         const qty = typeof qtyVal === 'number' ? qtyVal : (parseInt(qtyVal, 10) || 0);
@@ -262,21 +336,51 @@ export function parseYcgOrSosisExcel(filePathOrBuffer, options = {}) {
         items.push({ no, plu, desc, qty });
 
         const lowerDesc = desc.toLowerCase();
-        if (lowerDesc.includes('sosis') || lowerDesc.includes('sausage')) {
-            foundSosisItems = true;
+        if (initialIsSosis && !initialIsYcg) {
+            // File khusus laporan Sosis RTE: hanya hitung varian sosis
             if (lowerDesc.includes('keju') || lowerDesc.includes('cheese')) {
+                foundSosisItems = true;
                 sosisKejuTotal += qty;
-            } else {
+            } else if (
+                lowerDesc.includes('sosis') ||
+                lowerDesc.includes('sausage') ||
+                lowerDesc.includes('ori') ||
+                lowerDesc.includes('original')
+            ) {
+                foundSosisItems = true;
                 sosisOriTotal += qty;
             }
-        } else {
+            // Item pelengkap lain seperti saos/kemasan diabaikan dan tidak dimasukkan ke kopi
+        } else if (initialIsYcg && !initialIsSosis) {
+            // File khusus laporan YCG Coffee
             foundCoffeeItems = true;
             yccgTotal += qty;
+        } else {
+            // File gabungan atau auto-deteksi
+            if (lowerDesc.includes('sosis') || lowerDesc.includes('sausage')) {
+                foundSosisItems = true;
+                if (lowerDesc.includes('keju') || lowerDesc.includes('cheese')) {
+                    sosisKejuTotal += qty;
+                } else {
+                    sosisOriTotal += qty;
+                }
+            } else {
+                foundCoffeeItems = true;
+                yccgTotal += qty;
+            }
         }
     }
 
-    if (foundSosisItems) isSosis = true;
-    if (foundCoffeeItems || (!foundSosisItems && items.length > 0)) isYcg = true;
+    let isYcg = initialIsYcg || foundCoffeeItems;
+    let isSosis = initialIsSosis || foundSosisItems;
+
+    if (initialIsSosis && !initialIsYcg) {
+        isYcg = false;
+        isSosis = true;
+    } else if (initialIsYcg && !initialIsSosis) {
+        isYcg = true;
+        isSosis = false;
+    }
 
     const detectedDateStr = `${String(targetDay).padStart(2, '0')}-${String(dateInfo.month).padStart(2, '0')}-${dateInfo.year}`;
 
