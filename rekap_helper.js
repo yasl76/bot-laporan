@@ -1,31 +1,15 @@
-import xlsx from 'xlsx';
 import fs from 'fs';
+import path from 'path';
+import cp from 'child_process';
+import { fileURLToPath } from 'url';
 import { formatRp } from './src/formatters.js';
+import { getSafeTargetSPD, aggregateRekapData, buildExcelJSWorkbook } from './exceljs_rekap_builder.js';
 
+export { getSafeTargetSPD };
 
-export function getSafeTargetSPD(targetSPD, fallback = 4725000) {
-    if (typeof targetSPD === 'number' && Number.isFinite(targetSPD) && targetSPD > 0) {
-        return targetSPD;
-    }
-    const parsed = parseFloat(targetSPD);
-    if (Number.isFinite(parsed) && parsed > 0) {
-        return parsed;
-    }
-    return fallback;
-}
-function aggregateRekapData(dataList) {
-    let totalSpd = 0, totalMpp = 0, totalNbh = 0, totalYccg = 0, totalSosisOri = 0, totalSosisKeju = 0, totalRte = 0;
-    dataList.forEach(item => {
-        totalSpd += (item.spd || 0);
-        totalMpp += (item.mpp || 0);
-        totalNbh += (item.nbh || 0);
-        totalYccg += (item.yccg || 0);
-        totalSosisOri += (item.sosis_ori || 0);
-        totalSosisKeju += (item.sosis_keju || 0);
-        totalRte += (item.total_rte || 0);
-    });
-    return { totalSpd, totalMpp, totalNbh, totalYccg, totalSosisOri, totalSosisKeju, totalRte };
-}
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const WORKER_SCRIPT = path.join(__dirname, 'exceljs_rekap_worker.js');
 
 export function getStructuredTextRekap(dataList, targetSPD = 4725000, storeInfo = null) {
     if (!dataList || dataList.length === 0) {
@@ -83,133 +67,23 @@ export function generateRekapExcel(dataList, outputPath = 'Rekap_Bulanan.xlsx', 
         throw new Error('Tidak ada data laporan untuk di-export ke Excel.');
     }
 
-    const namaToko = storeInfo?.nama_toko || storeInfo?.nama || 'OMI TITAN EKSEKUTIF MART';
-    const kodeToko = storeInfo?.kode_toko || storeInfo?.kode || 'O8BM';
+    try {
+        const payload = JSON.stringify({
+            dataList,
+            outputPath: path.resolve(outputPath),
+            targetSPD,
+            storeInfo
+        });
 
-    const wb = xlsx.utils.book_new();
+        cp.execFileSync(process.execPath, [WORKER_SCRIPT], {
+            input: payload,
+            encoding: 'utf-8',
+            stdio: ['pipe', 'pipe', 'pipe']
+        });
 
-    // 1. SHEET 1: DATA HARIAN LENGKAP
-    const rowsHarian = [];
-    rowsHarian.push(['LAPORAN PENJUALAN HARIAN TOKO']);
-    rowsHarian.push([`${namaToko} (${kodeToko})`]);
-    rowsHarian.push([`Tanggal Export: ${new Date().toLocaleDateString('id-ID')} ${new Date().toLocaleTimeString('id-ID')}`]);
-    rowsHarian.push([]); // blank
-
-    rowsHarian.push([
-        'No.',
-        'Tanggal',
-        'SPD (Rp)',
-        'ACH Harian (%)',
-        'STD',
-        'APC (Rp)',
-        'MGRP (Rp)',
-        'MG (%)',
-        'LPP OMI (Rp)',
-        'Avg SPD (Rp)',
-        'ACH MTD (%)',
-        'YCCG (Cup)',
-        'Sosis Ori (Pcs)',
-        'Sosis Keju (Pcs)',
-        'Total RTE (Pcs)',
-        'SO MPP',
-        'SO NBH'
-    ]);
-
-    const targetSpdSafe = getSafeTargetSPD(targetSPD);
-
-    dataList.forEach((item, idx) => {
-        const itemSpd = typeof item.spd === 'number' ? item.spd : (parseFloat(item.spd) || 0);
-        const itemAvgSpd = typeof item.avg_spd === 'number' ? item.avg_spd : (parseFloat(item.avg_spd) || 0);
-
-        const rawAchHarian = (targetSpdSafe > 0 && itemSpd) ? ((itemSpd / targetSpdSafe) * 100) : 0;
-        const achHarian = Number.isFinite(rawAchHarian) ? parseFloat(rawAchHarian.toFixed(2)) : 0;
-
-        const rawAchMtd = (targetSpdSafe > 0 && itemAvgSpd) ? ((itemAvgSpd / targetSpdSafe) * 100) : 0;
-        const achMtd = Number.isFinite(rawAchMtd) ? parseFloat(rawAchMtd.toFixed(2)) : 0;
-
-        rowsHarian.push([
-            idx + 1,
-            item.tanggal,
-            itemSpd,
-            achHarian,
-            item.std || 0,
-            item.apc || 0,
-            item.mgrp || 0,
-            item.mg || '',
-            item.lpp || 0,
-            itemAvgSpd,
-            achMtd,
-            item.yccg || 0,
-            item.sosis_ori || 0,
-            item.sosis_keju || 0,
-            item.total_rte || 0,
-            item.mpp || 0,
-            item.nbh || 0
-        ]);
-    });
-
-    const wsHarian = xlsx.utils.aoa_to_sheet(rowsHarian);
-    wsHarian['!cols'] = [
-        { wch: 5 },  // No
-        { wch: 20 }, // Tanggal
-        { wch: 15 }, // SPD
-        { wch: 15 }, // ACH Harian
-        { wch: 8 },  // STD
-        { wch: 12 }, // APC
-        { wch: 15 }, // MGRP
-        { wch: 10 }, // MG%
-        { wch: 18 }, // LPP
-        { wch: 15 }, // Avg SPD
-        { wch: 15 }, // ACH MTD
-        { wch: 12 }, // YCCG
-        { wch: 15 }, // Sosis Ori
-        { wch: 15 }, // Sosis Keju
-        { wch: 15 }, // Total RTE
-        { wch: 10 }, // SO MPP
-        { wch: 10 }  // SO NBH
-    ];
-    xlsx.utils.book_append_sheet(wb, wsHarian, 'Data Penjualan Harian');
-
-    // 2. SHEET 2: RINGKASAN PERFORMA BULANAN
-    const { totalSpd, totalMpp, totalNbh, totalYccg, totalSosisOri, totalSosisKeju, totalRte } = aggregateRekapData(dataList);
-    const jumlahHari = dataList.length;
-
-    const rataSpd = jumlahHari > 0 ? Math.round(totalSpd / jumlahHari) : 0;
-    const rawAchMtd = targetSpdSafe > 0 ? ((rataSpd / targetSpdSafe) * 100) : 0;
-    const achMtd = Number.isFinite(rawAchMtd) ? rawAchMtd.toFixed(2) : '0.00';
-
-    const rowsRingkasan = [
-        ['RINGKASAN AKUMULASI PERFORMA BULANAN'],
-        [`${namaToko} (${kodeToko})`],
-        [`Tanggal Export: ${new Date().toLocaleDateString('id-ID')}`],
-        [],
-        ['Indikator Performa', 'Nilai / Akumulasi', 'Keterangan'],
-        ['Total Hari Masuk', jumlahHari, 'Hari Laporan'],
-        ['Target SPD Harian', targetSpdSafe, 'Target RAB Toko'],
-        ['Total Akumulasi SPD', totalSpd, 'Rupiah'],
-        ['Rata-rata SPD Harian', rataSpd, 'Rupiah'],
-        ['Pencapaian MTD (ACH %)', `${achMtd}%`, 'Terhadap Target RAB'],
-        [],
-        ['Kategori F&B', 'Total Terjual', 'Satuan'],
-        ['Penjualan YCCG', totalYccg, 'Cup'],
-        ['Sosis Original', totalSosisOri, 'Pcs'],
-        ['Sosis Keju', totalSosisKeju, 'Pcs'],
-        ['Total Penjualan RTE', totalRte, 'Pcs'],
-        [],
-        ['Temuan Stock Opname', 'Jumlah', 'Satuan'],
-        ['Total MPP (Expired/Rusak)', totalMpp, 'Item'],
-        ['Total NBH (Barang Hilang)', totalNbh, 'Item']
-    ];
-
-    const wsRingkasan = xlsx.utils.aoa_to_sheet(rowsRingkasan);
-    wsRingkasan['!cols'] = [
-        { wch: 30 },
-        { wch: 20 },
-        { wch: 25 }
-    ];
-    xlsx.utils.book_append_sheet(wb, wsRingkasan, 'Ringkasan Bulanan');
-
-    xlsx.writeFile(wb, outputPath);
-    return outputPath;
+        return outputPath;
+    } catch (err) {
+        console.error('Error saat membuat file Excel Rekap dengan ExcelJS:', err);
+        throw err;
+    }
 }
-

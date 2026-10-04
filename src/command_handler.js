@@ -47,6 +47,7 @@ import {
     escapeRegex,
     formatDateFileName
 } from './formatters.js';
+import { setPendingLaporSession, clearUserSession } from './upload_handler.js';
 
 /**
  * Tokenizes cleanText into command token, arguments array, and payload string.
@@ -129,6 +130,7 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
         '!setting', '!pengaturan', '!config',
         '!settarget', '!setrab', '!settoko', '!setstok',
         '!setreminder', '!setjam', '!setvalidasi', '!resetdata',
+        '!broadcastmenu',
         '!tambahnomor', '!linklid', '!hapusnomor', '!listnomor', '!whitelist'
     ];
 
@@ -386,6 +388,60 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
             await sock.sendMessage(sender, { text: listNumbers() });
             return true;
         }
+
+        // 1.14 BROADCAST MENU PEMBARUAN (!broadcastmenu)
+        if (lowerText === '!broadcastmenu') {
+            const wl = loadWhitelist();
+            const recipients = new Set();
+            if (wl.users && Array.isArray(wl.users)) {
+                wl.users.forEach(u => {
+                    const clean = normalizeNumber(u.number);
+                    if (clean && clean.length >= 10) {
+                        recipients.add(`${clean}@s.whatsapp.net`);
+                    }
+                });
+            }
+            if (wl.super_admins && Array.isArray(wl.super_admins)) {
+                wl.super_admins.forEach(sa => {
+                    const clean = normalizeNumber(sa);
+                    if (clean && clean.length >= 10) {
+                        recipients.add(`${clean}@s.whatsapp.net`);
+                    }
+                });
+            }
+            if (wl.admin) {
+                const clean = normalizeNumber(wl.admin);
+                if (clean && clean.length >= 10) {
+                    recipients.add(`${clean}@s.whatsapp.net`);
+                }
+            }
+
+            const broadcastText = `📢 *PENGUMUMAN PEMBARUAN SISTEM BOT OMI TITAN*\n\n` +
+                `Halo Rekan Tim Operasional & Admin,\n` +
+                `Untuk meningkatkan kerapian dan kemudahan operasional, perintah bot telah diperbarui:\n\n` +
+                `1️⃣ *!menu* atau *menu*:\n` +
+                `Kini hanya menampilkan daftar navigasi fitur, audit kasir, rekap, dan menu admin (tanpa template isian panjang).\n\n` +
+                `2️⃣ *!lapor* atau *lapor*:\n` +
+                `Perintah khusus untuk memunculkan format template laporan closing harian dan mengaktifkan sesi pelaporan aktif (10 menit).\n\n` +
+                `3️⃣ *Upload Excel Yummy Coffee (YCCG) & Sosis*:\n` +
+                `Kini file Excel laporan YCG & Sosis dapat diunggah saat sesi *!lapor* aktif untuk otomatis mengisi angka cup/pcs ke format closing!\n\n` +
+                `Terima kasih atas kerja samanya! 🙏`;
+
+            let successCount = 0;
+            for (const targetJid of recipients) {
+                try {
+                    await sock.sendMessage(targetJid, { text: broadcastText });
+                    successCount++;
+                } catch (e) {
+                    console.error(`Gagal mengirim broadcast ke ${targetJid}:`, e);
+                }
+            }
+
+            await sock.sendMessage(sender, {
+                text: `✅ *Broadcast Menu Berhasil Dikirim!*\n\nPesan pembaruan menu berhasil dikirimkan ke *${successCount}* kontak admin/karyawan terdaftar.`
+            });
+            return true;
+        }
     }
 
     // ============================================================
@@ -393,7 +449,8 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
     // ============================================================
     const isTargetingOperational =
         cleanText.includes('!kirimlaporan') ||
-        lowerText === 'menu' || lowerText === 'lapor' || lowerText === '!menu' ||
+        lowerText === 'menu' || lowerText === '!menu' ||
+        lowerText === 'lapor' || lowerText === '!lapor' ||
         lowerText === '!auditkas' || lowerText === '!cekshift' ||
         lowerText === '!pb' || lowerText === 'pb' || lowerText.startsWith('!pb ') || lowerText.startsWith('pb ') ||
         lowerText === '!rekap' || lowerText === 'rekap' || lowerText.startsWith('!rekap ') || lowerText.startsWith('rekap ') ||
@@ -408,12 +465,52 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
             return true;
         }
 
-        // 2.1 MENU & TEMPLATE LAPORAN (menu / lapor / !menu)
-        if (lowerText === 'lapor' || lowerText === 'menu' || lowerText === '!menu') {
+        // 2.1 MENU NAVIGASI OPERASIONAL (menu / !menu)
+        if (lowerText === 'menu' || lowerText === '!menu') {
             const isSuper = isSenderSuperAdmin;
             const cfg = loadConfig();
 
-            let templatePesan = `Halo! Silakan salin dan isi data laporan di bawah ini, lalu kirim kembali:\n\n!kirimlaporan\n` +
+            let menuPesan = `📋 *MENU NAVIGASI BOT LAPORAN OMI TITAN*\n` +
+                `Halo! Berikut adalah daftar menu perintah yang tersedia:\n\n` +
+                `📝 *Pelaporan Closing Harian:*\n` +
+                `- *!lapor* : Buka template format laporan closing harian & mulai sesi pelaporan\n\n` +
+                `💡 *Fitur & Perintah Operasional:*\n` +
+                `- *!auditkas* : Audit pra-closing kasir (Cash, E-Money, EDC & Uang Laci hari ini)\n` +
+                `- *Upload File Kasir (.TXT)* : Otomatis audit rekonsiliasi kas shift berjalan\n` +
+                `- *!rekap* : Ringkasan performa penjualan & SO bulan ini\n` +
+                `- *!rekap excel* : Unduh file Excel rekapitulasi harian lengkap\n` +
+                `- *!pb* : Analisa ringkasan stok pareto kritis (default <= ${cfg.ambang_stok_pb || 10} pcs)\n` +
+                `- *!pb [angka]* : Analisa pareto dengan batas stok kustom (cth: *!pb 5*)\n` +
+                `- *!pb excel* : Unduh file Excel rekomendasi restock suplier\n` +
+                `- *Upload Dokumen (.xls/.xlsx)* : Analisa pareto interaktif, atau upload YCG/Sosis saat sesi *!lapor* aktif\n` +
+                `- *!hapusdata* : Koreksi/hapus laporan hari ini jika ada salah ketik`;
+
+            if (isSuper) {
+                menuPesan += `\n\n👑 *Menu Khusus Super Admin:*\n` +
+                    `- *!setting* : Lihat & kelola pengaturan profil toko & target\n` +
+                    `- *!settarget [nominal]* : Ubah target SPD harian\n` +
+                    `- *!setrab [spd] [std] [apc] [gm]* : Ubah 4 target RAB toko\n` +
+                    `- *!settoko [Nama] | [Kode] | [Cabang]* : Ubah profil toko\n` +
+                    `- *!setstok [angka]* : Ubah default batas stok kritis PB\n` +
+                    `- *!setreminder [jam:menit / off]* : Atur jadwal pengingat closing\n` +
+                    `- *!broadcastmenu* : Kirim pengumuman update pemisahan menu ke semua admin\n` +
+                    `- *!listnomor* : Kelola nomor akses Super Admin & Admin Biasa\n` +
+                    `- *!tambahnomor [no] [nama]* : Daftarkan Admin Biasa baru\n` +
+                    `- *!hapusnomor [no]* : Hapus nomor admin\n` +
+                    `- *!resetdata* : Reset data rekap bulanan baru`;
+            }
+
+            menuPesan += `\n\nℹ️ _Ketik perintah yang diinginkan (contoh: *!lapor* atau *!auditkas*)_`;
+            await sock.sendMessage(sender, { text: menuPesan });
+            return true;
+        }
+
+        // 2.2 TEMPLATE LAPORAN & AKTIVASI SESI (lapor / !lapor)
+        if (lowerText === 'lapor' || lowerText === '!lapor') {
+            setPendingLaporSession(normSender);
+
+            const templateLapor = `Halo! Silakan salin dan isi data laporan di bawah ini, lalu kirim kembali:\n\n` +
+                `!kirimlaporan\n` +
                 `SPD: \n` +
                 `STD: \n` +
                 `APC: \n` +
@@ -432,32 +529,9 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
                 `NBH: \n` +
                 `Total MPP: \n` +
                 `Total NBH: \n\n` +
-                `💡 *Fitur & Perintah Operasional:*\n` +
-                `- *!auditkas* : Audit pra-closing kasir (Cash, E-Money, EDC & Uang Laci hari ini)\n` +
-                `- *Upload File Kasir (.TXT)* : Otomatis audit rekonsiliasi kas shift berjalan\n` +
-                `- *!rekap* : Ringkasan performa penjualan & SO bulan ini\n` +
-                `- *!rekap excel* : Unduh file Excel rekapitulasi harian lengkap\n` +
-                `- *!pb* : Analisa ringkasan stok pareto kritis (default <= ${cfg.ambang_stok_pb} pcs)\n` +
-                `- *!pb [angka]* : Analisa pareto dengan batas stok kustom (cth: *!pb 5*)\n` +
-                `- *!pb excel* : Unduh file Excel rekomendasi restock suplier\n` +
-                `- *Upload Dokumen (.xls/.xlsx)* : Analisa interaktif dengan pilihan batas stok\n` +
-                `- *!hapusdata* : Koreksi/hapus laporan hari ini jika ada salah ketik`;
+                `💡 _Tips: Sesi pelaporan aktif selama 10 menit. Anda dapat langsung mengunggah file Excel Yummy Coffee (YCCG) atau Sosis RTE sekarang untuk otomatis mengisi angka cup & sosis!_`;
 
-            if (isSuper) {
-                templatePesan += `\n\n👑 *Menu Khusus Super Admin:*\n` +
-                    `- *!setting* : Lihat & kelola pengaturan profil toko & target\n` +
-                    `- *!settarget [nominal]* : Ubah target SPD harian\n` +
-                    `- *!setrab [spd] [std] [apc] [gm]* : Ubah 4 target RAB toko\n` +
-                    `- *!settoko [Nama] | [Kode] | [Cabang]* : Ubah profil toko\n` +
-                    `- *!setstok [angka]* : Ubah default batas stok kritis PB\n` +
-                    `- *!setreminder [jam:menit / off]* : Atur jadwal pengingat closing\n` +
-                    `- *!listnomor* : Kelola nomor akses Super Admin & Admin Biasa\n` +
-                    `- *!tambahnomor [no] [nama]* : Daftarkan Admin Biasa baru\n` +
-                    `- *!hapusnomor [no]* : Hapus nomor admin\n` +
-                    `- *!resetdata* : Reset data rekap bulanan baru`;
-            }
-
-            await sock.sendMessage(sender, { text: templatePesan });
+            await sock.sendMessage(sender, { text: templateLapor });
             return true;
         }
 
@@ -838,6 +912,7 @@ export async function handleCommand(sock, m, senderContext = {}, options = {}) {
                 `NBH : ${totalNbh || nbh || 0}\n\n` +
                 `Terima kasih 🙏`;
 
+            clearUserSession(normSender);
             await sock.sendMessage(sender, { text: laporanTeks });
             return true;
         }

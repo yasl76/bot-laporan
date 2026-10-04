@@ -13,6 +13,7 @@ import { loadConfig, getStoreInfo } from '../config_helper.js';
 import { analyzePareto, generatePbExcel, getPbSummaryText } from '../pareto_analyzer.js';
 import { parsePosJournal, formatPosAuditMessage, getActiveOrLatestShift, calculateVariance, formatVarianceMessage } from '../struk_parser.js';
 import { parseNominal, formatRp, formatDateFileName } from './formatters.js';
+import { isYcgOrSosisFile, parseYcgOrSosisExcel } from '../ycg_parser.js';
 
 // In-memory state storage: Map<string, SessionState>
 // Key: normSender (string)
@@ -115,6 +116,21 @@ export function setPendingVarianceSession(normSender, sessionData) {
 }
 
 /**
+ * Initiates an interactive closing reporting session (called from !lapor command).
+ * @param {string} normSender - Normalized sender ID
+ * @param {object} [sessionData] - Optional initial data
+ */
+export function setPendingLaporSession(normSender, sessionData = {}) {
+    if (!normSender) return;
+    clearUserSession(normSender);
+    userSessions.set(normSender, {
+        type: 'LAPOR',
+        timestamp: Date.now(),
+        ...sessionData
+    });
+}
+
+/**
  * Background garbage collection for expired sessions and orphaned files.
  * @returns {number} Number of cleaned stale sessions
  */
@@ -187,6 +203,82 @@ export async function handleDocumentUpload(sock, m, senderContext, options = {})
 
             const cfg = loadConfig();
             const storeInfo = getStoreInfo(cfg);
+
+            // 1.1 CEK FILE LAPORAN YUMMY COFFEE (YCCG) ATAU SOSIS RTE
+            if (isYcgOrSosisFile(savedPath, rawFileName)) {
+                const currentSession = getUserSession(normSender);
+                if (!currentSession || currentSession.type !== 'LAPOR') {
+                    if (savedPath) {
+                        try { if (fs.existsSync(savedPath)) fs.unlinkSync(savedPath); } catch (_) {}
+                    }
+                    await sock.sendMessage(sender, {
+                        text: '⚠️ File Laporan Yummy Coffee / Sosis hanya dapat diunggah saat sesi pelaporan aktif. Silakan ketik *!lapor* terlebih dahulu sebelum mengunggah file ini.'
+                    });
+                    return true;
+                }
+
+                try {
+                    const parsed = parseYcgOrSosisExcel(savedPath, { fileName: rawFileName });
+                    if (parsed.yccg !== null && parsed.yccg !== undefined) {
+                        currentSession.yccg = parsed.yccg;
+                    }
+                    if (parsed.sosisOri !== null && parsed.sosisOri !== undefined) {
+                        currentSession.sosisOri = parsed.sosisOri;
+                    }
+                    if (parsed.sosisKeju !== null && parsed.sosisKeju !== undefined) {
+                        currentSession.sosisKeju = parsed.sosisKeju;
+                    }
+                    if (parsed.totalRte !== null && parsed.totalRte !== undefined) {
+                        currentSession.totalRte = parsed.totalRte;
+                    }
+                    currentSession.timestamp = Date.now();
+
+                    const yccgStr = currentSession.yccg !== undefined ? currentSession.yccg : '';
+                    const sosisOriStr = currentSession.sosisOri !== undefined ? currentSession.sosisOri : '';
+                    const sosisKejuStr = currentSession.sosisKeju !== undefined ? currentSession.sosisKeju : '';
+
+                    let infoTeks = `✅ *DATA EXCEL BERHASIL DIBACA!*\n` +
+                        `• File: *${rawFileName}*\n` +
+                        `• Tanggal Data: *${parsed.detectedDateStr || parsed.targetDay}*\n`;
+
+                    if (parsed.isYcg && parsed.yccg !== null) {
+                        infoTeks += `• Penjualan YCCG: *${parsed.yccg} Cup*\n`;
+                    }
+                    if (parsed.isSosis) {
+                        infoTeks += `• Sosis Original: *${parsed.sosisOri || 0} Pcs*\n` +
+                            `• Sosis Keju    : *${parsed.sosisKeju || 0} Pcs*\n` +
+                            `• Total Sosis   : *${parsed.totalRte || 0} Pcs*\n`;
+                    }
+
+                    infoTeks += `\nSilakan salin draf laporan di bawah ini, lengkapi data penjualan lainnya, lalu kirim kembali:\n\n` +
+                        `!kirimlaporan\n` +
+                        `SPD: \n` +
+                        `STD: \n` +
+                        `APC: \n` +
+                        `MGRP: \n` +
+                        `MG%: \n` +
+                        `LPP: \n` +
+                        `Avg SPD: \n` +
+                        `Avg STD: \n` +
+                        `Avg APC: \n` +
+                        `Avg MGRP: \n` +
+                        `Avg MG%: \n` +
+                        `YCCG: ${yccgStr}\n` +
+                        `Sosis Ori: ${sosisOriStr}\n` +
+                        `Sosis Keju: ${sosisKejuStr}\n` +
+                        `MPP: \n` +
+                        `NBH: \n` +
+                        `Total MPP: \n` +
+                        `Total NBH: `;
+
+                    await sock.sendMessage(sender, { text: infoTeks });
+                    return true;
+                } finally {
+                    if (savedPath) {
+                        try { if (fs.existsSync(savedPath)) fs.unlinkSync(savedPath); } catch (_) {}
+                    }
+                }
+            }
 
             // Direct match flow: !pb [N] (e.g. "!pb 5" or "!pb 15")
             const directMatch = cleanText.match(/^!pb\s+(\d+)$/i);
@@ -355,13 +447,21 @@ export async function handleInteractiveResponse(sock, m, senderContext) {
     if (lowerText === 'batal') {
         const fileName = session.fileName || 'dokumen';
         const isPareto = session.type === 'PARETO';
+        const isLapor = session.type === 'LAPOR';
         clearUserSession(normSender);
         if (isPareto) {
             await sock.sendMessage(sender, { text: `❌ Analisa dokumen pareto *${fileName}* telah dibatalkan.` });
+        } else if (isLapor) {
+            await sock.sendMessage(sender, { text: '❌ Sesi pelaporan closing telah dibatalkan.' });
         } else {
             await sock.sendMessage(sender, { text: '❌ Alur rekonsiliasi kas telah dibatalkan.' });
         }
         return true;
+    }
+
+    // Sesi LAPOR: teruskan seluruh perintah/teks ke command_handler
+    if (session.type === 'LAPOR') {
+        return false;
     }
 
     // Command interruption: allow command pass-through

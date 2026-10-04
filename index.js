@@ -7,7 +7,9 @@ import { startScheduler, stopScheduler } from './src/scheduler.js';
 import {
     handleDocumentUpload,
     handleInteractiveResponse,
-    setPendingVarianceSession
+    setPendingVarianceSession,
+    setPendingLaporSession,
+    clearUserSession
 } from './src/upload_handler.js';
 import { handleCommand } from './src/command_handler.js';
 import {
@@ -113,7 +115,11 @@ export async function onIncomingMessage(sock, { messages } = {}) {
         }
 
         // Step 3: Command handler and report dispatcher
-        await handleCommand(sock, m, senderContext, { setPendingVarianceSession });
+        await handleCommand(sock, m, senderContext, {
+            setPendingVarianceSession,
+            setPendingLaporSession,
+            clearUserSession
+        });
     } catch (err) {
         console.error('⚠️ Error processing incoming message:', err);
     }
